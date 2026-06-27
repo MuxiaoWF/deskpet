@@ -1,0 +1,118 @@
+<resources>
+    <string name="app_name">DeskPet</string>
+
+    <!-- MainActivity -->
+    <string name="title_live2d_pet">Live2D 桌寵</string>
+    <string name="section_control">控制</string>
+    <string name="section_import">匯入模型</string>
+    <string name="section_size">大小調節</string>
+    <string name="section_models">已匯入的模型</string>
+    <string name="section_birthday">生日</string>
+
+    <string name="btn_start_pet">啟動桌寵</string>
+    <string name="btn_stop_pet">停止桌寵</string>
+    <string name="btn_loading">載入中…</string>
+    <string name="btn_pet_running">桌寵執行中</string>
+    <string name="btn_importing">匯入中…</string>
+    <string name="btn_import_folder">匯入資料夾</string>
+    <string name="btn_import_lpk">匯入 LPK / WPK</string>
+    <string name="btn_load">載入</string>
+
+    <string name="hint_empty_models">尚無模型，點擊上方按鈕匯入</string>
+
+    <string name="toast_overlay_permission">需要懸浮視窗權限</string>
+    <string name="toast_pet_started">桌寵已啟動</string>
+    <string name="toast_pet_started_loading">桌寵已啟動，正在載入上次的模型…</string>
+    <string name="toast_importing">正在匯入模型…</string>
+    <string name="toast_unpacking">正在解壓縮 LPK…</string>
+    <string name="toast_import_success">模型匯入成功</string>
+    <string name="toast_lpk_success">LPK 匯入成功</string>
+    <string name="toast_import_failed">模型匯入失敗</string>
+    <string name="toast_lpk_failed">LPK 解壓縮失敗</string>
+    <string name="toast_model_loading">模型載入中，請稍候…</string>
+    <string name="status_deleting">刪除中…</string>
+    <string name="toast_renamed">已重新命名為「%s」</string>
+    <string name="toast_rename_failed">重新命名失敗</string>
+    <string name="toast_name_exists">名稱已存在</string>
+    <string name="toast_deleted">已刪除「%s」</string>
+    <string name="toast_delete_failed">刪除失敗：%s</string>
+
+    <string name="dialog_import_model">匯入模型</string>
+    <string name="dialog_import_lpk">匯入 LPK</string>
+    <string name="dialog_name_hint">為模型命名</string>
+    <string name="dialog_confirm">確定</string>
+    <string name="dialog_cancel">取消</string>
+    <string name="dialog_auto_name">自動命名</string>
+    <string name="dialog_rename_title">重新命名模型</string>
+    <string name="dialog_delete_title">刪除模型</string>
+    <string name="dialog_delete_message">確定刪除「%s」？\n此操作無法復原。</string>
+    <string name="dialog_delete_confirm">刪除</string>
+    <string name="dialog_error_title">操作失敗</string>
+    <string name="dialog_retry">重試</string>
+    <string name="dialog_close">關閉</string>
+    <string name="dialog_both_disabled_title">警告</string>
+    <string name="dialog_both_disabled_message">拖曳和長按選單同時關閉，可能導致無法互動或無法開啟選單重新啟用。</string>
+    <string name="dialog_both_disabled_confirm">仍然關閉</string>
+
+    <!-- Birthday -->
+    <string name="birthday_not_set">未設定（生日動作將隱藏）</string>
+    <string name="birthday_set">生日：%1$d月%2$d日</string>
+    <string name="birthday_set_btn">設定</string>
+    <string name="birthday_change">變更</string>
+    <string name="birthday_clear">清除</string>
+    <string name="birthday_note">註：大部分模型都沒有生日動作配置，且該功能未經測試</string>
+
+    <!-- FloatingWindowService notification -->
+    <string name="notif_channel_name">DeskPet 服務</string>
+    <string name="notif_channel_desc">DeskPet 懸浮視窗服務</string>
+    <string name="notif_title">DeskPet</string>
+    <string name="notif_running">桌寵執行中</string>
+    <string name="notif_loading">模型載入中…</string>
+    <string name="notif_click_through">點擊穿透模式</string>
+    <string name="notif_action_ct_on">點擊穿透</string>
+    <string name="notif_action_ct_off">恢復互動</string>
+    <string name="notif_action_stop">停止</string>
+    <string name="toast_ct_on">點擊穿透已開啟</string>
+    <string name="toast_ct_off">點擊穿透已關閉</string>
+
+    <!-- ActionMenuManager -->
+    <string name="menu_expressions">表情</string>
+    <string name="menu_slots">組件</string>
+    <string name="menu_cancel">取消</string>
+    <string name="menu_settings">設定</string>
+    <string name="menu_long_press_menu">長按選單</string>
+    <string name="menu_edge_hide">邊緣隱藏</string>
+    <string name="menu_auto_follow">自動跟隨</string>
+    <string name="menu_show_hit_areas">顯示點擊區域</string>
+    <string name="menu_aabb_hit_test">AABB 碰撞檢測</string>
+    <string name="menu_click_through">點擊穿透</string>
+    <string name="menu_random_speak">隨機發言</string>
+    <string name="menu_random_speak_interval">發言間隔</string>
+    <string name="menu_motion_enabled">動作</string>
+    <string name="menu_drag_enabled">拖曳</string>
+    <string name="menu_ct_alpha">穿透透明度</string>
+    <string name="menu_edge_visible">邊緣可見</string>
+    <string name="menu_blend_mode">混合模式</string>
+    <string name="menu_physics_weight">物理權重</string>
+    <string name="menu_mirror">鏡像</string>
+    <string name="menu_rotation">旋轉</string>
+
+    <!-- Content descriptions (accessibility) -->
+    <string name="cd_model_preview">模型預覽圖</string>
+    <string name="cd_rename_model">重新命名模型</string>
+    <string name="cd_delete_model">刪除模型</string>
+    <string name="cd_export_model">匯出模型</string>
+
+    <!-- Export -->
+    <string name="toast_exporting">正在匯出…</string>
+    <string name="toast_export_success">匯出成功</string>
+    <string name="toast_export_failed">匯出失敗</string>
+    <string name="btn_exporting">匯出中…</string>
+
+    <!-- Model card buttons -->
+    <string name="btn_export">匯出</string>
+    <string name="btn_rename">重新命名</string>
+    <string name="btn_delete">刪除</string>
+
+    <!-- Language -->
+</resources>

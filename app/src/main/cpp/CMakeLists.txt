@@ -1,0 +1,37 @@
+target_sources(${APP_NAME}
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/JniBridgeC.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/JniBridgeC.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/LAppDefine.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/LAppDefine.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/LAppDelegate.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/LAppDelegate.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/LAppLive2DManager.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/LAppLive2DManager.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/LAppModel.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/LAppModel.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/LAppPal.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/LAppPal.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/LAppTextureManager.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/LAppTextureManager.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/LAppView.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/LAppView.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Cubism2ParamBridge.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Cubism2ParamBridge.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Cubism2ModelSetting.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Cubism2ModelSetting.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Cubism2MocLoader.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Cubism2MocLoader.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/LAppModelCubism2.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/LAppModelCubism2.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/ModelConfigParser.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/ModelConfigParser.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/ControllerEngine.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/ControllerEngine.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/MotionSequencer.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/MotionSequencer.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/RandomSpeaker.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/RandomSpeaker.hpp
+)
+
+target_include_directories(${APP_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

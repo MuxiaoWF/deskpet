@@ -1,0 +1,42 @@
+*.iml
+.gradle
+/local.properties
+/.idea/
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# Build outputs
+*.apk
+*.aab
+/app/release
+
+# Claude Code local config
+.claude/
+
+# Logs
+*.log
+
+# OS
+Thumbs.db
+
+# NDK
+obj/
+
+# Live2D Cubism SDK (proprietary)
+Core/
+
+# Samples (not yet initialized as submodule)
+Samples/
+
+# Merge conflict files
+*.orig
+
+# IL2CPP temp files
+il2cpp_temp/
+
+# analyse files
+doc/

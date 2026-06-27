@@ -1,0 +1,7 @@
+<resources>
+    <string-array name="blend_mode_entries">
+        <item>覆盖</item>
+        <item>叠加</item>
+        <item>相乘</item>
+    </string-array>
+</resources>

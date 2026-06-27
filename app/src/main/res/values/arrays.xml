@@ -1,0 +1,7 @@
+<resources>
+    <string-array name="blend_mode_entries">
+        <item>Overwrite</item>
+        <item>Add</item>
+        <item>Multiply</item>
+    </string-array>
+</resources>

@@ -1,0 +1,61 @@
+From: deskpet project
+Subject: [PATCH] Enable toggle motion looping in Live2D Cubism SDK
+
+These patches to the Live2D Cubism Framework enable motion looping
+for toggle motions defined in model3.json.
+
+Only motions WITHOUT PartOpacity curves are looped -- toggle motions only have
+Parameter curves and need looping to maintain state. Menu/transition motions
+have PartOpacity curves that would flicker if looped.
+
+Re-apply after updating Framework/ from upstream:
+  git apply patches/framework-toggle-loop.patch
+
+---
+ Framework/src/Motion/CubismMotion.cpp             | 12 +++++++++++-
+ Framework/src/Motion/CubismMotionQueueManager.cpp |  8 ++++++++
+ 2 files changed, 19 insertions(+), 1 deletion(-)
+
+diff --git a/Framework/src/Motion/CubismMotion.cpp b/Framework/src/Motion/CubismMotion.cpp
+index 702f85a..7e52f46 100644
+--- a/Framework/src/Motion/CubismMotion.cpp
++++ b/Framework/src/Motion/CubismMotion.cpp
+@@ -305,7 +305,18 @@ CubismMotion* CubismMotion::Create(const csmByte* buffer, csmSizeInt size, Finis
+     }
+ 
+     // NOTE: Editorではループありのモーション書き出しは非対応
+-    // ret->_loop = (ret->_motionData->Loop > 0);
++    // Only enable looping for motions without PartOpacity curves.
++    // Toggle motions only have Parameter curves — need looping to maintain state.
++    // Menu/transition motions have PartOpacity curves — looping causes flickering.
++    if (ret && ret->_motionData->Loop > 0) {
++        ret->SetLoop(true);
++        for (csmInt32 ci = 0; ci < ret->_motionData->CurveCount; ci++) {
++            if (ret->_motionData->Curves[ci].Type == CubismMotionCurveTarget_PartOpacity) {
++                ret->SetLoop(false);
++                break;
++            }
++        }
++    }
+ 
+     return ret;
+ }
+diff --git a/Framework/src/Motion/CubismMotionQueueManager.cpp b/Framework/src/Motion/CubismMotionQueueManager.cpp
+index 12658fa..57d821b 100644
+--- a/Framework/src/Motion/CubismMotionQueueManager.cpp
++++ b/Framework/src/Motion/CubismMotionQueueManager.cpp
+@@ -118,6 +118,14 @@ csmBool CubismMotionQueueManager::DoUpdateMotion(CubismModel* model, csmFloat32
+                 motionQueueEntry->StartFadeout(motionQueueEntry->GetFadeOutSeconds(), userTimeSeconds);
+             }
+ 
++            // Looping motions never finish naturally. After fadeout completes,
++            // force-finish them so they get cleaned up from the queue.
++            if (motion->GetLoop() && motionQueueEntry->GetEndTime() > 0.0f
++                && motionQueueEntry->GetEndTime() < userTimeSeconds)
++            {
++                motionQueueEntry->IsFinished(true);
++            }
++
+             ++ite;
+         }
+     }

@@ -1,0 +1,7 @@
+<resources>
+    <!-- Light theme with visible status bar (not fullscreen) -->
+    <style name="Theme.Deskpet" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:statusBarColor">@android:color/white</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>
