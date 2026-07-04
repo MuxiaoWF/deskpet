@@ -93,7 +93,13 @@ public class LpkUnpacker {
                     if (nestedLpkPath != null) {
                         Log.i(TAG, "Found nested LPK: " + nestedLpkPath);
                         JSONObject configJson = readConfigJson(zip);
-                        return extractNestedLpk(zip, nestedLpkPath, configJson, outerPreview, customName);
+                        // Extract title from outer WPK config.json for auto-naming
+                        String wpkTitle = null;
+                        if (configJson != null) {
+                            String t = configJson.optString("title", "");
+                            if (!t.isEmpty()) wpkTitle = t;
+                        }
+                        return extractNestedLpk(zip, nestedLpkPath, configJson, outerPreview, customName, wpkTitle);
                     }
                     Log.e(TAG, "Failed to find config.mlve or nested LPK");
                     return null;
@@ -583,7 +589,8 @@ public class LpkUnpacker {
      * Extract nested LPK from Steam Workshop wrapper.
      */
     private String extractNestedLpk(ZipFile zip, String nestedLpkPath,
-                                     JSONObject configJson, byte[] outerPreview, String customName) throws Exception {
+                                     JSONObject configJson, byte[] outerPreview, String customName,
+                                     String wpkTitle) throws Exception {
         // If generic search didn't find outer preview, try explicit path based on WPK structure:
         // WPK = {id}/config.json + {id}/preview.png(or random name) + {id}/{id}.lpk
         if (outerPreview == null && nestedLpkPath.contains("/")) {
@@ -664,12 +671,15 @@ public class LpkUnpacker {
             int sdkVersion = detectSdkVersion(mlve);
             Log.i(TAG, "Nested LPK SDK version: " + sdkVersion);
 
+            // Resolve model name: customName > wpkTitle > timestamp
+            String resolvedName = (customName != null && !customName.isEmpty()) ? customName : wpkTitle;
+
             if ("STD2_0".equals(lpkType) || "STM_1_0".equals(lpkType)) {
-                modelJsonPath = extractStructured(nestedZip, mlve, lpkType, keyId, fileId, metaData, customName);
+                modelJsonPath = extractStructured(nestedZip, mlve, lpkType, keyId, fileId, metaData, resolvedName);
             } else {
                 // STD_1_0 or unknown: extract all files
-                String modelName = (customName != null && !customName.isEmpty())
-                        ? customName : "lpk_model_" + System.currentTimeMillis();
+                String modelName = (resolvedName != null && !resolvedName.isEmpty())
+                        ? resolvedName : "lpk_model_" + System.currentTimeMillis();
                 File outDir = new File(context.getFilesDir(), "models/" + sanitizeForDirName(modelName));
                 outDir.mkdirs();
                 modelJsonPath = extractFlat(nestedZip, lpkType, keyId, null, null, encrypted, outDir);

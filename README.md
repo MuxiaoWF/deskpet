@@ -75,10 +75,12 @@ deskpet/
 │   ├── Cubism2MocLoader.cpp        # Cubism 2 moc 文件加载
 │   ├── RandomSpeaker.cpp           # 随机语音
 │   └── LAppPal.cpp                 # 平台抽象（时间、路径、日志）
-├── Core/                           # Live2D Cubism SDK
-├── Framework/                      # [submodule] Cubism Native Framework
-└── Samples/                        # [submodule] Cubism Native Samples
+├── Core/                           # Live2D Cubism SDK（不纳入版本管理，见 .gitignore）
+├── Framework/                      # [submodule] Cubism Native Framework（含本地修改）
+└── Samples/                        # [submodule] Cubism Native Samples（未初始化）
 ```
+
+> **Framework 说明：** `Framework/` 基于 Cubism 5 SDK R5，包含 4 处本地修改（PartOpacity 求值修复、选择性循环、队列清理、纹理采样修复）。详见 [FRAMEWORK_PATCHES.md](FRAMEWORK_PATCHES.md)。上游更新时需重新应用这些修改。
 
 ---
 

@@ -75,10 +75,12 @@ deskpet/
 │   ├── Cubism2MocLoader.cpp        # Cubism 2 moc file loader
 │   ├── RandomSpeaker.cpp           # Random speech
 │   └── LAppPal.cpp                 # Platform abstraction (time, path, log)
-├── Core/                           # Live2D Cubism SDK
-├── Framework/                      # [submodule] Cubism Native Framework
-└── Samples/                        # [submodule] Cubism Native Samples
+├── Core/                           # Live2D Cubism SDK (not tracked, see .gitignore)
+├── Framework/                      # [submodule] Cubism Native Framework (with local patches)
+└── Samples/                        # [submodule] Cubism Native Samples (not initialized)
 ```
+
+> **Framework note:** `Framework/` is based on Cubism 5 SDK R5 with 4 local patches (PartOpacity fix, selective looping, queue cleanup, texture sampling fix). See [FRAMEWORK_PATCHES.md](FRAMEWORK_PATCHES.md) for details. Patches must be reapplied when updating from upstream.
 
 ---
 
