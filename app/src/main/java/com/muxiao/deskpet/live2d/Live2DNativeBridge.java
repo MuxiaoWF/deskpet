@@ -153,11 +153,32 @@ public class Live2DNativeBridge {
     }
 
     /**
-     * Called from native code when a VarFloat value changes.
+     * Called from native code when a VarFloat value changes (for menu sync).
      */
     public static void onVarFloatChanged(String name, float value) {
         if (varFloatChangedCallback != null) {
             varFloatChangedCallback.onVarFloatChanged(name, value);
+        }
+    }
+
+    public interface ModelLoadCallback {
+        void onModelLoadResult(boolean success, String modelPath);
+    }
+
+    private static volatile ModelLoadCallback modelLoadCallback;
+
+    public static void setModelLoadCallback(ModelLoadCallback callback) {
+        modelLoadCallback = callback;
+    }
+
+    /**
+     * Called from native code after a model load attempt.
+     * Without this, a corrupt model leaves a blank window with no feedback.
+     */
+    public static void onModelLoadResult(boolean success, String modelPath) {
+        ModelLoadCallback cb = modelLoadCallback;
+        if (cb != null) {
+            cb.onModelLoadResult(success, modelPath);
         }
     }
 

@@ -54,6 +54,28 @@
     <string name="dialog_both_disabled_message">Both drag and long-press menu are disabled.\nYou may not be able to interact with the pet or access the menu to re-enable them.</string>
     <string name="dialog_both_disabled_confirm">Disable Anyway</string>
 
+    <!-- Import UX / robustness -->
+    <string name="dialog_no_model_title">No Model Imported</string>
+    <string name="dialog_no_model_message">No model is available yet.\nImport a model folder or an LPK/WPK package in the "Import Model" section first, then start the pet.</string>
+    <string name="dialog_pick_again">Pick Again</string>
+    <string name="err_not_lpk">The selected file is not a valid LPK/WPK package, or it is corrupted.</string>
+    <string name="err_folder_empty">The selected folder is empty.</string>
+    <string name="err_no_model_json">No model file (.model3.json / .model.json) was found in the selected content.</string>
+    <string name="err_import_io">A read/write error occurred during import.</string>
+    <string name="err_lpk_unpack">Failed to parse the LPK package. It may be an unsupported format or damaged.</string>
+    <string name="import_cancelled">Import cancelled</string>
+    <string name="import_status_cancelling">Cancelling…</string>
+    <string name="import_status_scanning">Scanning folder…</string>
+    <string name="import_status_working">Importing…</string>
+    <string name="import_status_reading">Reading file…</string>
+    <string name="import_status_percent">Reading file… %1$d%%</string>
+    <string name="import_status_unpacking">Unpacking…</string>
+    <string name="import_status_files">Importing… %1$d/%2$d files</string>
+    <string name="toast_crash_restart_no_model">Model failed to load. Please select a model again.</string>
+    <string name="toast_model_load_failed">Model failed to load. Try re-importing it or selecting another model.</string>
+    <string name="notif_load_failed">Model failed to load</string>
+    <string name="toast_rename_stop_pet_first">This model is running. Stop the pet before renaming it.</string>
+
     <!-- Birthday -->
     <string name="birthday_not_set">Not set (birthday motions hidden)</string>
     <string name="birthday_set">Birthday: %1$d/%2$d</string>

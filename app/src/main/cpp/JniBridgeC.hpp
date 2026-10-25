@@ -28,4 +28,8 @@ public:
 
     /// Notify Java side that a VarFloat value changed (for menu sync).
     static void NotifyVarFloatChanged(const char* name, float value);
+
+    /// Notify Java side whether the last model load succeeded or failed,
+    /// so the UI can tell the user instead of showing a blank window.
+    static void NotifyModelLoadResult(bool success, const char* modelPath);
 };

@@ -17,6 +17,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Imports Live2D models from SAF (Storage Access Framework) directory URIs.
@@ -26,10 +27,29 @@ public class ModelImporter {
 
     private static final String TAG = "ModelImporter";
 
+    // Failure reasons exposed via getLastError() so the UI can show a
+    // specific message instead of a generic "import failed"
+    public static final String ERR_EMPTY = "empty";
+    public static final String ERR_NO_MODEL_JSON = "no_model_json";
+    public static final String ERR_IO = "io";
+    public static final String ERR_CANCELLED = "cancelled";
+
     private final Context context;
+    private final List<String> errors = new ArrayList<>();
+    private volatile AtomicBoolean cancelFlag;
+    private volatile String lastError;
 
     public ModelImporter(Context context) {
         this.context = context;
+    }
+
+    /** Reason of the last failure, or null if the last import succeeded. */
+    public String getLastError() {
+        return lastError;
+    }
+
+    public String importModel(Uri treeUri, String customName) {
+        return importModel(treeUri, customName, null, null);
     }
 
     /**
@@ -38,25 +58,44 @@ public class ModelImporter {
      *
      * @param treeUri    SAF tree URI of the source directory
      * @param customName optional custom name for the model directory
-     * @return absolute path to the model JSON file, or null on failure
+     * @param cancelFlag when set to true, aborts the import and cleans up (nullable)
+     * @param progress   progress callback, null-safe (nullable)
+     * @return absolute path to the model JSON file, or null on failure (see getLastError)
      */
-    public String importModel(Uri treeUri, String customName) {
+    public String importModel(Uri treeUri, String customName,
+                              AtomicBoolean cancelFlag, ImportProgressListener progress) {
+        this.cancelFlag = cancelFlag;
+        this.lastError = null;
+        File modelDir = null;
         try {
+            notifyScan(progress);
+
             List<UriFile> files = listFiles(treeUri);
-            if (files.isEmpty()) return null;
+            if (files.isEmpty()) {
+                lastError = listHadError ? ERR_IO : ERR_EMPTY;
+                return null;
+            }
 
             // Find the model settings file (.model3.json preferred over .model.json)
             // Prioritize top-level files to avoid picking up sub-models
             String modelJsonName = findModelJsonName(files);
-            if (modelJsonName == null) return null;
+            if (modelJsonName == null) {
+                lastError = ERR_NO_MODEL_JSON;
+                return null;
+            }
 
             // Determine directory name: custom > derived from model JSON filename
             String modelName = resolveModelName(customName, modelJsonName);
-            File modelDir = createUniqueModelDir(modelName);
+            modelDir = createUniqueModelDir(modelName);
             modelDir.mkdirs();
 
             // Copy all files preserving directory structure
+            int copied = 0;
             for (UriFile f : files) {
+                if (isCancelled()) {
+                    lastError = ERR_CANCELLED;
+                    return null;
+                }
                 String relativePath = f.relativePath;
                 if (relativePath == null || relativePath.isEmpty()) continue;
 
@@ -69,23 +108,56 @@ public class ModelImporter {
                             byte[] buf = new byte[8192];
                             int len;
                             while ((len = is.read(buf)) > 0) {
+                                if (isCancelled()) {
+                                    lastError = ERR_CANCELLED;
+                                    return null;
+                                }
                                 fos.write(buf, 0, len);
                             }
                         }
                     }
                 } catch (Exception e) {
                     Log.e(TAG, "Failed to copy file: " + f.relativePath, e);
+                    errors.add(f.relativePath);
                 }
+                copied++;
+                notifyCopy(progress, copied, files.size());
+            }
+
+            // The model JSON is the one file that must have been copied successfully
+            File modelJsonFile = new File(modelDir, modelJsonName);
+            if (!modelJsonFile.exists() || modelJsonFile.length() == 0) {
+                Log.e(TAG, "Model JSON was not copied: " + modelJsonName
+                        + (errors.isEmpty() ? "" : " (failed: " + errors + ")"));
+                lastError = ERR_IO;
+                return null;
             }
 
             // Extract configs from config.mlve if present in the imported folder
             extractConfigsFromMlve(modelDir);
 
-            return new File(modelDir, modelJsonName).getAbsolutePath();
+            return modelJsonFile.getAbsolutePath();
         } catch (Exception e) {
             Log.e(TAG, "Failed to import model from URI", e);
+            lastError = ERR_IO;
             return null;
+        } finally {
+            if (lastError != null && modelDir != null && modelDir.exists()) {
+                FileUtils.deleteRecursive(modelDir);
+            }
         }
+    }
+
+    private boolean isCancelled() {
+        return cancelFlag != null && cancelFlag.get();
+    }
+
+    private static void notifyScan(ImportProgressListener progress) {
+        if (progress != null) progress.onProgress(ImportProgressListener.STAGE_SCAN, -1, -1);
+    }
+
+    private static void notifyCopy(ImportProgressListener progress, int done, int total) {
+        if (progress != null) progress.onProgress(ImportProgressListener.STAGE_COPY, done, total);
     }
 
     /**
@@ -148,13 +220,17 @@ public class ModelImporter {
 
     // --- SAF Directory Listing ---
 
+    private boolean listHadError;
+
     private List<UriFile> listFiles(Uri treeUri) {
         List<UriFile> result = new ArrayList<>();
+        listHadError = false;
         listFilesRecursive(treeUri, "", result);
         return result;
     }
 
     private void listFilesRecursive(Uri dirUri, String prefix, List<UriFile> result) {
+        if (isCancelled()) return;
         String docId;
         try {
             docId = DocumentsContract.getDocumentId(dirUri);
@@ -198,6 +274,7 @@ public class ModelImporter {
                 }
             }
         } catch (Exception e) {
+            listHadError = true;
             Log.e(TAG, "Failed to list directory contents", e);
         }
     }

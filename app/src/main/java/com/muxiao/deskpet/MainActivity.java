@@ -80,7 +80,17 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private LinearLayout modelListLayout;
+    // Incremented on each refresh so stale background parse/decode results
+    // for older list generations are dropped
+    private int modelListGeneration = 0;
+    private LinearLayout importStatusBar;
+    private TextView importStatusText;
     private ProgressBar importProgressBar;
+    private Button btnCancelImport;
+    private final java.util.concurrent.atomic.AtomicBoolean importCancelFlag =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+    // Which import is currently running: null = none, "folder" / "lpk" / "export"
+    private String importKind;
     private boolean isDarkMode;
 
     // Loading state tracking
@@ -99,6 +109,10 @@ public class MainActivity extends AppCompatActivity {
             return value.getByteCount();
         }
     };
+
+    // Progress callback shared by folder import / LPK unpack; formats the bottom status bar
+    private final ImportProgressListener importProgressListener = (stage, done, total) ->
+            runOnUiThread(() -> updateImportProgressUi(stage, done, total));
 
     // Activity Result API launchers
     private final ActivityResultLauncher<Intent> overlayPermissionLauncher =
@@ -128,7 +142,7 @@ public class MainActivity extends AppCompatActivity {
             registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
                 if (result.getResultCode() == RESULT_OK && result.getData() != null) {
                     Uri uri = result.getData().getData();
-                    if (uri != null) {
+                    if (uri != null && requireValidLpk(uri)) {
                         String defaultName = guessNameFromUri(uri);
                         showNameInputDialog(
                                 getString(R.string.dialog_import_lpk),
@@ -173,7 +187,12 @@ public class MainActivity extends AppCompatActivity {
 
                 @Override
                 public void onServiceStopped() {
-                    runOnUiThread(() -> updateButtonStates());
+                    runOnUiThread(() -> {
+                        // The service took its in-flight loads with it — clear
+                        // stale entries so buttons don't stay stuck on "Loading…"
+                        loadingPaths.clear();
+                        updateButtonStates();
+                    });
                 }
             };
 
@@ -296,15 +315,80 @@ public class MainActivity extends AppCompatActivity {
         root.addView(scrollView, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
 
-        // Import progress bar (hidden by default)
+        // Import status bar: progress + status text + cancel button (hidden by default)
+        importStatusBar = new LinearLayout(this);
+        importStatusBar.setOrientation(LinearLayout.VERTICAL);
+        GradientDrawable barBg = new GradientDrawable();
+        barBg.setColor(C_CARD);
+        barBg.setCornerRadius(dp(10));
+        importStatusBar.setBackground(barBg);
+        importStatusBar.setElevation(dp(4));
+        importStatusBar.setPadding(dp(14), dp(10), dp(14), dp(10));
+        importStatusBar.setVisibility(View.GONE);
+
         importProgressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-        importProgressBar.setIndeterminate(true);
-        importProgressBar.setVisibility(View.GONE);
-        LinearLayout.LayoutParams progressLp = new LinearLayout.LayoutParams(
+        importProgressBar.setProgressTintList(android.content.res.ColorStateList.valueOf(C_PRIMARY));
+        importProgressBar.setIndeterminateTintList(android.content.res.ColorStateList.valueOf(C_PRIMARY));
+        importStatusBar.addView(importProgressBar, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        // Breathing room between the progress track and the status text
+        importStatusBar.addView(spacer(dp(6)));
+
+        LinearLayout statusRow = new LinearLayout(this);
+        statusRow.setOrientation(LinearLayout.HORIZONTAL);
+        statusRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        importStatusText = new TextView(this);
+        importStatusText.setTextSize(13);
+        importStatusText.setTextColor(C_TEXT);
+        importStatusText.setMaxLines(1);
+        importStatusText.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+        statusRow.addView(importStatusText, new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+
+        btnCancelImport = new Button(this);
+        btnCancelImport.setText(R.string.dialog_cancel);
+        btnCancelImport.setTextColor(C_TEXT_SECONDARY);
+        btnCancelImport.setTextSize(13);
+        btnCancelImport.setBackground(textBtnBg());
+        btnCancelImport.setAllCaps(false);
+        btnCancelImport.setMinWidth(0);
+        btnCancelImport.setMinimumWidth(0);
+        btnCancelImport.setMinimumHeight(0);
+        btnCancelImport.setPadding(dp(12), dp(4), dp(12), dp(4));
+        LinearLayout.LayoutParams cancelLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        cancelLp.setMargins(dp(10), 0, 0, 0);
+        btnCancelImport.setLayoutParams(cancelLp);
+        btnCancelImport.setOnClickListener(v -> {
+            importCancelFlag.set(true);
+            btnCancelImport.setEnabled(false);
+            importStatusText.setText(R.string.import_status_cancelling);
+        });
+        statusRow.addView(btnCancelImport);
+
+        importStatusBar.addView(statusRow, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        LinearLayout.LayoutParams barLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        root.addView(importProgressBar, progressLp);
+        // Side margins match the scroll content padding so the bar lines up
+        // with the section cards above it
+        barLp.setMargins(dp(14), dp(4), dp(14), dp(10));
+        root.addView(importStatusBar, barLp);
 
         setContentView(root);
+
+        // Edge-to-edge is enforced for targetSdk 35+: keep content clear of
+        // system bars on both ends. When the window already fits system
+        // windows these inset to 0 = no-op.
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
+            androidx.core.graphics.Insets bars = insets.getInsets(
+                    androidx.core.view.WindowInsetsCompat.Type.systemBars());
+            v.setPadding(0, bars.top, 0, bars.bottom);
+            return androidx.core.view.WindowInsetsCompat.CONSUMED;
+        });
         setupStatusBar();
         refreshModelList();
         handleIncomingIntent(getIntent());
@@ -676,6 +760,7 @@ public class MainActivity extends AppCompatActivity {
     // --- Model List ---
 
     private void refreshModelList() {
+        final int gen = ++modelListGeneration;
         modelListLayout.removeAllViews();
         File modelsDir = new File(getFilesDir(), "models");
         if (!modelsDir.exists()) {
@@ -689,6 +774,7 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
+        int cards = 0;
         for (File dir : modelDirs) {
             File[] cubism3Files = dir.listFiles((d, name) ->
                     name.endsWith(".model3.json") && new File(d, name).isFile());
@@ -697,10 +783,17 @@ public class MainActivity extends AppCompatActivity {
                             && new File(d, name).isFile());
 
             if (cubism3Files != null && cubism3Files.length > 0) {
-                addModelCard(cubism3Files[0], dir);
+                addModelCard(cubism3Files[0], dir, gen);
+                cards++;
             } else if (cubism2Files != null && cubism2Files.length > 0) {
-                addModelCard(cubism2Files[0], dir);
+                addModelCard(cubism2Files[0], dir, gen);
+                cards++;
             }
+        }
+        // Directories exist but none contains a model JSON — explain instead
+        // of showing a silently empty list
+        if (cards == 0) {
+            showEmptyHint();
         }
     }
 
@@ -743,13 +836,13 @@ public class MainActivity extends AppCompatActivity {
         modelListLayout.addView(hint);
     }
 
-    private void addModelCard(File jsonFile, File dir) {
+    private void addModelCard(File jsonFile, File dir, int gen) {
         String fileName = jsonFile.getName();
         String versionTag = fileName.endsWith(".model3.json") ? "v3+" : "v2";
 
-        String parsedName = parseModelDisplayName(jsonFile);
-        String modelName = (parsedName != null) ? parsedName
-                : fileName.replace(".model3.json", "").replace(".model.json", "");
+        // Fallback name rendered immediately; the display name from the model
+        // JSON is parsed on a worker thread below (the JSON can be large)
+        String modelName = fileName.replace(".model3.json", "").replace(".model.json", "");
 
         final String modelPath = jsonFile.getAbsolutePath();
         final String dirPath = dir.getAbsolutePath();
@@ -780,41 +873,14 @@ public class MainActivity extends AppCompatActivity {
         row1.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
-        // Preview thumbnail with caching and contentDescription
+        // Preview thumbnail: cache hit renders immediately, miss decodes on
+        // the worker thread below (decodeFile + bounds pass are disk I/O)
         File previewFile = FileUtils.findPreviewImage(dir);
+        ImageView thumb = null;
         if (previewFile.exists()) {
-            try {
-                String cacheKey = previewFile.getAbsolutePath();
-                Bitmap bmp = thumbnailCache.get(cacheKey);
-                if (bmp == null || bmp.isRecycled()) {
-                    BitmapFactory.Options opts = new BitmapFactory.Options();
-                    opts.inSampleSize = calculateInSampleSize(previewFile, dp(48), dp(48));
-                    bmp = BitmapFactory.decodeFile(previewFile.getAbsolutePath(), opts);
-                    if (bmp != null) {
-                        thumbnailCache.put(cacheKey, bmp);
-                    }
-                }
-                if (bmp != null && !bmp.isRecycled()) {
-                    ImageView thumb = new ImageView(this);
-                    thumb.setImageBitmap(bmp);
-                    thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
-                    thumb.setContentDescription(getString(R.string.cd_model_preview));
-                    int size = dp(40);
-                    LinearLayout.LayoutParams thumbLp = new LinearLayout.LayoutParams(size, size);
-                    thumbLp.setMargins(0, 0, dp(10), 0);
-                    thumb.setLayoutParams(thumbLp);
-                    thumb.setClipToOutline(true);
-                    thumb.setOutlineProvider(new ViewOutlineProvider() {
-                        @Override
-                        public void getOutline(View view, android.graphics.Outline outline) {
-                            outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(6));
-                        }
-                    });
-                    row1.addView(thumb);
-                }
-            } catch (Exception e) {
-                Log.w("MainActivity", "Failed to load preview: " + previewFile, e);
-            }
+            Bitmap cached = thumbnailCache.get(previewFile.getAbsolutePath());
+            thumb = createThumbView((cached != null && !cached.isRecycled()) ? cached : null);
+            row1.addView(thumb);
         }
 
         // Model info
@@ -851,6 +917,9 @@ public class MainActivity extends AppCompatActivity {
             statusTv.setTextColor(C_TEXT_SECONDARY);
         } else {
             statusTv.setText(modelName);
+            // Async name updates only apply while this line shows the model
+            // name (not "Loading…"/"Deleting…")
+            statusTv.setTag(modelPath);
             statusTv.setTextColor(C_TEXT_SECONDARY);
         }
         statusTv.setTextSize(11);
@@ -955,14 +1024,23 @@ public class MainActivity extends AppCompatActivity {
                     .setPositiveButton(R.string.dialog_confirm, (dialog, which) -> {
                         String newName = input.getText().toString().trim();
                         if (newName.isEmpty() || newName.equals(dir.getName())) return;
+                        // The running pet holds absolute paths into this directory
+                        // (model dir for sounds, native model files); renaming
+                        // underneath it would silently break them.
+                        SharedPreferences sp = getSharedPreferences(FloatingWindowService.PREF_NAME, MODE_PRIVATE);
+                        String lastPath = sp.getString("last_model_path", null);
+                        if (FloatingWindowService.isRunning()
+                                && lastPath != null && lastPath.startsWith(dirPath)) {
+                            Toast.makeText(this, R.string.toast_rename_stop_pet_first,
+                                    Toast.LENGTH_LONG).show();
+                            return;
+                        }
                         File newDir = new File(dir.getParentFile(), newName);
                         if (newDir.exists()) {
                             Toast.makeText(this, R.string.toast_name_exists, Toast.LENGTH_SHORT).show();
                             return;
                         }
                         if (dir.renameTo(newDir)) {
-                            SharedPreferences sp = getSharedPreferences(FloatingWindowService.PREF_NAME, MODE_PRIVATE);
-                            String lastPath = sp.getString("last_model_path", null);
                             if (lastPath != null && lastPath.startsWith(dirPath)) {
                                 String updated = lastPath.replace(dirPath, newDir.getAbsolutePath());
                                 sp.edit().putString("last_model_path", updated).apply();
@@ -994,13 +1072,24 @@ public class MainActivity extends AppCompatActivity {
                 .setTitle(R.string.dialog_delete_title)
                 .setMessage(getString(R.string.dialog_delete_message, dir.getName()))
                 .setPositiveButton(R.string.dialog_delete_confirm, (dialog, which) -> {
-                    stopService(new Intent(this, FloatingWindowService.class));
+                    // Only stop the pet when the deleted model is the one it's showing;
+                    // deleting an unrelated model shouldn't kill a running pet.
+                    SharedPreferences sp = getSharedPreferences(FloatingWindowService.PREF_NAME, MODE_PRIVATE);
+                    String lastPath = sp.getString("last_model_path", null);
+                    boolean deletingRunningModel = lastPath != null && lastPath.startsWith(dirPath);
+                    if (deletingRunningModel) {
+                        stopService(new Intent(this, FloatingWindowService.class));
+                    }
                     deletingPaths.add(dirPath);
                     updateButtonStates();
                     new Thread(() -> {
                         boolean success = FileUtils.deleteRecursive(dir);
                         runOnUiThread(() -> {
                             deletingPaths.remove(dirPath);
+                            if (success && deletingRunningModel) {
+                                getSharedPreferences(FloatingWindowService.PREF_NAME, MODE_PRIVATE)
+                                        .edit().remove("last_model_path").apply();
+                            }
                             if (success) {
                                 Toast.makeText(this, getString(R.string.toast_deleted, dir.getName()), Toast.LENGTH_SHORT).show();
                             } else {
@@ -1016,7 +1105,69 @@ public class MainActivity extends AppCompatActivity {
 
         card.addView(row2);
 
+        // Parse display name and decode thumbnail off the UI thread; results
+        // are dropped when the list has been rebuilt or views detached since
+        final TextView statusTvRef = statusTv;
+        final ImageView thumbRef = thumb;
+        final File previewRef = previewFile;
+        final int thumbTarget = dp(48);
+        new Thread(() -> {
+            String parsed = parseModelDisplayName(jsonFile);
+            if (parsed != null && !parsed.equals(modelName)) {
+                runOnUiThread(() -> {
+                    if (modelListGeneration != gen || !statusTvRef.isAttachedToWindow()) return;
+                    if (!modelPath.equals(statusTvRef.getTag())) return;
+                    statusTvRef.setText(parsed);
+                });
+            }
+            if (thumbRef != null && previewRef != null) {
+                try {
+                    String cacheKey = previewRef.getAbsolutePath();
+                    Bitmap bmp = thumbnailCache.get(cacheKey);
+                    if (bmp == null || bmp.isRecycled()) {
+                        BitmapFactory.Options opts = new BitmapFactory.Options();
+                        opts.inSampleSize = calculateInSampleSize(previewRef, thumbTarget, thumbTarget);
+                        bmp = BitmapFactory.decodeFile(previewRef.getAbsolutePath(), opts);
+                        if (bmp != null) {
+                            thumbnailCache.put(cacheKey, bmp);
+                        }
+                    }
+                    if (bmp != null && !bmp.isRecycled()) {
+                        final Bitmap loaded = bmp;
+                        runOnUiThread(() -> {
+                            if (modelListGeneration != gen || !thumbRef.isAttachedToWindow()) return;
+                            thumbRef.setImageBitmap(loaded);
+                        });
+                    }
+                } catch (Exception e) {
+                    Log.w("MainActivity", "Failed to load preview: " + previewRef, e);
+                }
+            }
+        }).start();
+
         modelListLayout.addView(card);
+    }
+
+    /** Rounded thumbnail view for the model card; bitmap may arrive later. */
+    private ImageView createThumbView(Bitmap bmp) {
+        ImageView thumb = new ImageView(this);
+        if (bmp != null) {
+            thumb.setImageBitmap(bmp);
+        }
+        thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        thumb.setContentDescription(getString(R.string.cd_model_preview));
+        int size = dp(40);
+        LinearLayout.LayoutParams thumbLp = new LinearLayout.LayoutParams(size, size);
+        thumbLp.setMargins(0, 0, dp(10), 0);
+        thumb.setLayoutParams(thumbLp);
+        thumb.setClipToOutline(true);
+        thumb.setOutlineProvider(new ViewOutlineProvider() {
+            @Override
+            public void getOutline(View view, android.graphics.Outline outline) {
+                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(6));
+            }
+        });
+        return thumb;
     }
 
     // --- Drawable Helpers ---
@@ -1076,6 +1227,7 @@ public class MainActivity extends AppCompatActivity {
 
         String uriStr = uri.toString().toLowerCase(Locale.ROOT);
         if (Intent.ACTION_VIEW.equals(action) && (uriStr.endsWith(".lpk") || uriStr.endsWith(".wpk"))) {
+            if (!requireValidLpk(uri)) return;
             String defaultName = guessNameFromUri(uri);
             showNameInputDialog(
                     getString(R.string.dialog_import_lpk),
@@ -1083,6 +1235,65 @@ public class MainActivity extends AppCompatActivity {
                     defaultName,
                     name -> doImportLpk(uri, name));
         }
+    }
+
+    /**
+     * Verify the URI actually points to a ZIP-based package (LPK/WPK are ZIPs)
+     * before asking for a model name. Shows a specific error with a
+     * "pick again" action when it doesn't.
+     */
+    private boolean requireValidLpk(Uri uri) {
+        if (isZipUri(uri)) return true;
+        showImportErrorDialog(getString(R.string.err_not_lpk),
+                getString(R.string.dialog_pick_again), this::importLpk);
+        return false;
+    }
+
+    /** Check the first bytes for a ZIP local-header / EOCD / spanning signature. */
+    private boolean isZipUri(Uri uri) {
+        try (InputStream is = getContentResolver().openInputStream(uri)) {
+            if (is == null) return false;
+            byte[] head = new byte[4];
+            int n = 0;
+            while (n < 4) {
+                int r = is.read(head, n, 4 - n);
+                if (r < 0) break;
+                n += r;
+            }
+            if (n < 4) return false;
+            return head[0] == 'P' && head[1] == 'K'
+                    && (head[2] == 3 || head[2] == 5 || head[2] == 7)
+                    && (head[3] == 4 || head[3] == 6 || head[3] == 8);
+        } catch (Exception e) {
+            Log.w("MainActivity", "Failed to read LPK header: " + uri, e);
+            return false;
+        }
+    }
+
+    /**
+     * Most recently modified model JSON under files/models, or null when none exists.
+     * Used as a fallback when the persisted last-model path is gone.
+     */
+    private File findAnyModelJson() {
+        File modelsDir = new File(getFilesDir(), "models");
+        File[] dirs = modelsDir.listFiles(File::isDirectory);
+        if (dirs == null) return null;
+        File best = null;
+        long bestTime = Long.MIN_VALUE;
+        for (File dir : dirs) {
+            File[] cubism3 = dir.listFiles((d, name) ->
+                    name.endsWith(".model3.json") && new File(d, name).isFile());
+            File[] cubism2 = dir.listFiles((d, name) ->
+                    name.endsWith(".model.json") && !name.endsWith(".model3.json")
+                            && new File(d, name).isFile());
+            File json = (cubism3 != null && cubism3.length > 0) ? cubism3[0]
+                    : ((cubism2 != null && cubism2.length > 0) ? cubism2[0] : null);
+            if (json != null && dir.lastModified() > bestTime) {
+                best = json;
+                bestTime = dir.lastModified();
+            }
+        }
+        return best;
     }
 
     private void startPet() {
@@ -1100,21 +1311,28 @@ public class MainActivity extends AppCompatActivity {
 
         SharedPreferences prefs = getSharedPreferences(FloatingWindowService.PREF_NAME, MODE_PRIVATE);
         String lastModelPath = prefs.getString("last_model_path", null);
-        if (lastModelPath != null && new File(lastModelPath).exists()) {
-            loadingPaths.add(lastModelPath);
-            updateButtonStates();
-            refreshModelList();
-            LpkUnpacker.UnpackResult persisted = LpkUnpacker.loadPersistedConfigs(lastModelPath);
-            FloatingWindowService.start(this, lastModelPath,
-                    persisted.hitAreaConfig, persisted.lookAtConfig, persisted.modelConfig);
-            Toast.makeText(this, R.string.toast_pet_started_loading, Toast.LENGTH_SHORT).show();
-        } else {
-            FloatingWindowService.start(this, null);
-            Toast.makeText(this, R.string.toast_pet_started, Toast.LENGTH_SHORT).show();
-            btnStartPet.setText(getString(R.string.btn_pet_running));
-            btnStartPet.setTextColor(C_TEXT_SECONDARY);
-            btnStartPet.setEnabled(false);
+        File target = (lastModelPath != null && new File(lastModelPath).exists())
+                ? new File(lastModelPath) : findAnyModelJson();
+
+        if (target == null) {
+            // Nothing to show — starting an empty overlay window would just
+            // confuse the user, so guide them to import a model instead.
+            new AlertDialog.Builder(this)
+                    .setTitle(R.string.dialog_no_model_title)
+                    .setMessage(R.string.dialog_no_model_message)
+                    .setPositiveButton(R.string.dialog_confirm, null)
+                    .show();
+            return;
         }
+
+        String modelPath = target.getAbsolutePath();
+        loadingPaths.add(modelPath);
+        updateButtonStates();
+        refreshModelList();
+        LpkUnpacker.UnpackResult persisted = LpkUnpacker.loadPersistedConfigs(modelPath);
+        FloatingWindowService.start(this, modelPath,
+                persisted.hitAreaConfig, persisted.lookAtConfig, persisted.modelConfig);
+        Toast.makeText(this, R.string.toast_pet_started_loading, Toast.LENGTH_SHORT).show();
     }
 
     private void importModel() {
@@ -1130,69 +1348,100 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
-     * Import a model from a SAF directory URI with error dialog and retry.
+     * Import a model from a SAF directory URI with progress, cancel and
+     * error-specific failure handling.
      */
     private void doImportModel(Uri uri, String customName) {
         isImporting = true;
+        importKind = "folder";
+        importCancelFlag.set(false);
         updateButtonStates();
-        importProgressBar.setVisibility(View.VISIBLE);
-        Toast.makeText(this, R.string.toast_importing, Toast.LENGTH_SHORT).show();
+        showImportStatus(getString(R.string.import_status_scanning), true, 0, 0);
 
         new Thread(() -> {
+            ModelImporter importer = new ModelImporter(this);
             String modelPath = null;
             try {
-                ModelImporter importer = new ModelImporter(this);
-                modelPath = importer.importModel(uri, customName);
+                modelPath = importer.importModel(uri, customName, importCancelFlag, importProgressListener);
             } catch (Exception e) {
                 Log.e("MainActivity", "Import failed", e);
             }
             final String mp = modelPath;
+            final String err = importer.getLastError();
             runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
                 isImporting = false;
-                importProgressBar.setVisibility(View.GONE);
+                importKind = null;
+                hideImportStatus();
+                refreshModelList();
+                updateButtonStates();
                 if (mp != null) {
                     Toast.makeText(this, R.string.toast_import_success, Toast.LENGTH_SHORT).show();
-                    refreshModelList();
                     if (Settings.canDrawOverlays(this)) {
                         loadingPaths.add(mp);
                         updateButtonStates();
-                        FloatingWindowService.start(this, mp);
+                        LpkUnpacker.UnpackResult persisted = LpkUnpacker.loadPersistedConfigs(mp);
+                        FloatingWindowService.start(this, mp,
+                                persisted.hitAreaConfig, persisted.lookAtConfig, persisted.modelConfig);
                     } else {
                         startPet();
                     }
+                } else if (ModelImporter.ERR_CANCELLED.equals(err)) {
+                    Toast.makeText(this, R.string.import_cancelled, Toast.LENGTH_SHORT).show();
                 } else {
-                    showErrorRetryDialog(getString(R.string.toast_import_failed),
-                            () -> doImportModel(uri, customName));
-                    updateButtonStates();
+                    showImportModelError(err, uri, customName);
                 }
             });
         }).start();
     }
 
+    /** Map folder-import error codes to a message and a sensible primary action. */
+    private void showImportModelError(String err, Uri uri, String customName) {
+        if (ModelImporter.ERR_EMPTY.equals(err)) {
+            showImportErrorDialog(getString(R.string.err_folder_empty),
+                    getString(R.string.dialog_pick_again), this::importModel);
+        } else if (ModelImporter.ERR_NO_MODEL_JSON.equals(err)) {
+            showImportErrorDialog(getString(R.string.err_no_model_json),
+                    getString(R.string.dialog_pick_again), this::importModel);
+        } else if (ModelImporter.ERR_IO.equals(err)) {
+            showImportErrorDialog(getString(R.string.err_import_io),
+                    getString(R.string.dialog_retry), () -> doImportModel(uri, customName));
+        } else {
+            showImportErrorDialog(getString(R.string.toast_import_failed),
+                    getString(R.string.dialog_pick_again), this::importModel);
+        }
+    }
+
     /**
-     * Import a model from an LPK/WPK file with error dialog and retry.
+     * Import a model from an LPK/WPK file with progress, cancel and
+     * error-specific failure handling.
      */
     private void doImportLpk(Uri uri, String customName) {
         isImporting = true;
+        importKind = "lpk";
+        importCancelFlag.set(false);
         updateButtonStates();
-        importProgressBar.setVisibility(View.VISIBLE);
-        Toast.makeText(this, R.string.toast_unpacking, Toast.LENGTH_SHORT).show();
+        showImportStatus(getString(R.string.import_status_reading), true, 0, 0);
 
         new Thread(() -> {
             LpkUnpacker.UnpackResult result = null;
+            LpkUnpacker unpacker = new LpkUnpacker(this);
             try {
-                LpkUnpacker unpacker = new LpkUnpacker(this);
-                result = unpacker.unpackWithConfig(uri, customName);
+                result = unpacker.unpackWithConfig(uri, customName, importCancelFlag, importProgressListener);
             } catch (Exception e) {
                 Log.e("MainActivity", "LPK unpack failed", e);
             }
             final LpkUnpacker.UnpackResult r = result;
+            final String err = unpacker.getLastError();
             runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
                 isImporting = false;
-                importProgressBar.setVisibility(View.GONE);
+                importKind = null;
+                hideImportStatus();
+                refreshModelList();
+                updateButtonStates();
                 if (r != null && r.modelPath != null) {
                     Toast.makeText(this, R.string.toast_lpk_success, Toast.LENGTH_SHORT).show();
-                    refreshModelList();
                     if (Settings.canDrawOverlays(this)) {
                         loadingPaths.add(r.modelPath);
                         updateButtonStates();
@@ -1201,13 +1450,31 @@ public class MainActivity extends AppCompatActivity {
                     } else {
                         startPet();
                     }
+                } else if (LpkUnpacker.ERR_CANCELLED.equals(err)) {
+                    Toast.makeText(this, R.string.import_cancelled, Toast.LENGTH_SHORT).show();
                 } else {
-                    showErrorRetryDialog(getString(R.string.toast_lpk_failed),
-                            () -> doImportLpk(uri, customName));
-                    updateButtonStates();
+                    showImportLpkError(err, uri, customName);
                 }
             });
         }).start();
+    }
+
+    /** Map LPK error codes to a message and a sensible primary action. */
+    private void showImportLpkError(String err, Uri uri, String customName) {
+        if (LpkUnpacker.ERR_NOT_ZIP.equals(err) || LpkUnpacker.ERR_NO_CONFIG.equals(err)) {
+            // Retrying the same file can never succeed — offer re-picking instead
+            showImportErrorDialog(getString(R.string.err_not_lpk),
+                    getString(R.string.dialog_pick_again), this::importLpk);
+        } else if (LpkUnpacker.ERR_UNPACK.equals(err)) {
+            showImportErrorDialog(getString(R.string.err_lpk_unpack),
+                    getString(R.string.dialog_retry), () -> doImportLpk(uri, customName));
+        } else if (LpkUnpacker.ERR_NO_MODEL_JSON.equals(err)) {
+            showImportErrorDialog(getString(R.string.err_no_model_json),
+                    getString(R.string.dialog_pick_again), this::importLpk);
+        } else {
+            showImportErrorDialog(getString(R.string.toast_lpk_failed),
+                    getString(R.string.dialog_retry), () -> doImportLpk(uri, customName));
+        }
     }
 
     /**
@@ -1215,9 +1482,9 @@ public class MainActivity extends AppCompatActivity {
      */
     private void doExportModel(Uri treeUri) {
         isExporting = true;
+        importKind = "export";
         updateButtonStates();
-        importProgressBar.setVisibility(View.VISIBLE);
-        Toast.makeText(this, R.string.toast_exporting, Toast.LENGTH_SHORT).show();
+        showImportStatus(getString(R.string.toast_exporting), true, 0, 0);
 
         new Thread(() -> {
             boolean success = false;
@@ -1234,8 +1501,11 @@ public class MainActivity extends AppCompatActivity {
             }
             final boolean ok = success;
             runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
                 isExporting = false;
-                importProgressBar.setVisibility(View.GONE);
+                importKind = null;
+                hideImportStatus();
+                updateButtonStates();
                 if (ok) {
                     Toast.makeText(this, R.string.toast_export_success, Toast.LENGTH_SHORT).show();
                 } else {
@@ -1274,15 +1544,69 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
-     * Show an error dialog with retry and close options.
+     * Show an error dialog with one primary action (retry or pick again) and close.
      */
-    private void showErrorRetryDialog(String message, Runnable onRetry) {
+    private void showImportErrorDialog(String message, String positiveLabel, Runnable positiveAction) {
         new AlertDialog.Builder(this)
                 .setTitle(R.string.dialog_error_title)
                 .setMessage(message)
-                .setPositiveButton(R.string.dialog_retry, (dialog, which) -> onRetry.run())
+                .setPositiveButton(positiveLabel, (dialog, which) -> positiveAction.run())
                 .setNegativeButton(R.string.dialog_close, null)
                 .show();
+    }
+
+    // --- Import status bar ---
+
+    /** Show the bottom status bar with initial text; cancelable only for imports. */
+    private void showImportStatus(String text, boolean indeterminate, int done, int total) {
+        importStatusText.setText(text);
+        btnCancelImport.setVisibility("export".equals(importKind) ? View.GONE : View.VISIBLE);
+        btnCancelImport.setEnabled(true);
+        btnCancelImport.setText(R.string.dialog_cancel);
+        applyImportProgress(indeterminate, done, total);
+        importStatusBar.setVisibility(View.VISIBLE);
+    }
+
+    /** Format a progress callback from the worker thread into the status bar. */
+    private void updateImportProgressUi(int stage, int done, int total) {
+        if (importStatusBar == null || importStatusBar.getVisibility() != View.VISIBLE) return;
+        boolean lpk = "lpk".equals(importKind);
+        if (done < 0 || total <= 0) {
+            String text;
+            if (stage == ImportProgressListener.STAGE_SCAN) {
+                text = getString(R.string.import_status_scanning);
+            } else if (stage == ImportProgressListener.STAGE_COPY) {
+                text = getString(lpk ? R.string.import_status_reading
+                        : R.string.import_status_working);
+            } else {
+                text = getString(R.string.import_status_unpacking);
+            }
+            importStatusText.setText(text);
+            applyImportProgress(true, 0, 0);
+            return;
+        }
+        if (stage == ImportProgressListener.STAGE_COPY) {
+            importStatusText.setText(lpk
+                    ? getString(R.string.import_status_percent, done)
+                    : getString(R.string.import_status_files, done, total));
+        } else if (stage == ImportProgressListener.STAGE_SCAN) {
+            importStatusText.setText(getString(R.string.import_status_scanning));
+        } else {
+            importStatusText.setText(getString(R.string.import_status_unpacking));
+        }
+        applyImportProgress(false, done, total);
+    }
+
+    private void applyImportProgress(boolean indeterminate, int done, int total) {
+        importProgressBar.setIndeterminate(indeterminate);
+        if (!indeterminate && total > 0) {
+            importProgressBar.setMax(Math.max(1, total));
+            importProgressBar.setProgress(Math.max(0, Math.min(done, total)));
+        }
+    }
+
+    private void hideImportStatus() {
+        importStatusBar.setVisibility(View.GONE);
     }
 
     private interface NameCallback {
@@ -1300,6 +1624,8 @@ public class MainActivity extends AppCompatActivity {
         }
         input.setPadding(dp(16), dp(12), dp(16), dp(4));
 
+        // Negative = real cancel (dismiss, no import); neutral = auto-name keeps
+        // the "one tap" path for users who don't care about naming.
         new AlertDialog.Builder(this)
                 .setTitle(title)
                 .setView(input)
@@ -1307,8 +1633,8 @@ public class MainActivity extends AppCompatActivity {
                     String name = input.getText().toString().trim();
                     onConfirmed.onName(name.isEmpty() ? null : name);
                 })
-                .setNegativeButton(R.string.dialog_auto_name, (dialog, which) -> onConfirmed.onName(null))
-                .setCancelable(false)
+                .setNegativeButton(R.string.dialog_cancel, null)
+                .setNeutralButton(R.string.dialog_auto_name, (dialog, which) -> onConfirmed.onName(null))
                 .show();
     }
 

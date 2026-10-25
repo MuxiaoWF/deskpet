@@ -172,6 +172,23 @@ void JniBridgeC::NotifyVarFloatChanged(const char* name, float value)
     env->DeleteLocalRef(jName);
 }
 
+void JniBridgeC::NotifyModelLoadResult(bool success, const char* modelPath)
+{
+    JNIEnv* env = GetEnv();
+    if(env == nullptr) {
+        return;
+    }
+    jmethodID method = env->GetStaticMethodID(g_Live2DNativeBridgeClass,
+        "onModelLoadResult", "(ZLjava/lang/String;)V");
+    if(method == nullptr) {
+        return;
+    }
+    jstring jPath = env->NewStringUTF(modelPath ? modelPath : "");
+    env->CallStaticVoidMethod(g_Live2DNativeBridgeClass, method,
+        success ? JNI_TRUE : JNI_FALSE, jPath);
+    env->DeleteLocalRef(jPath);
+}
+
 extern "C"
 {
     JNIEXPORT void JNICALL

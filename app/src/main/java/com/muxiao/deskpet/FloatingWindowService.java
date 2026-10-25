@@ -92,6 +92,7 @@ public class FloatingWindowService extends Service {
 
     private boolean clickThrough = false;
     private volatile boolean isLoadingModel = false;
+    private volatile boolean lastLoadFailed = false;
     private long lastTapTime = 0;
     private boolean dragEnabled = true;
     private boolean surfaceReady = false;
@@ -105,6 +106,7 @@ public class FloatingWindowService extends Service {
     // single-tap motion first. Long-press fires while holding (standard
     // Android behavior), not on finger release.
     private final android.os.Handler gestureHandler = new android.os.Handler(Looper.getMainLooper());
+    private final android.os.Handler mainHandler = new android.os.Handler(Looper.getMainLooper());
     private Runnable pendingTapRunnable;
     private Runnable longPressRunnable;
     private boolean longPressConsumed;
@@ -114,6 +116,12 @@ public class FloatingWindowService extends Service {
     private boolean isPinching = false;
     private boolean wasPinching = false;  // tracks if a pinch occurred during this touch sequence
     private static final float PINCH_THRESHOLD = 1.2f;
+
+    // Edge-hide peek: after the pet is expanded (via tap or toggle), it hides
+    // again this long after the last touch — so edge hide still works when
+    // dragging is disabled, where drag-end was previously the only re-hide path
+    private static final long EDGE_PEEK_HIDE_MS = 4000;
+    private Runnable peekHideRunnable;
 
     // Shake gesture detection
     private SensorManager sensorManager;
@@ -146,9 +154,20 @@ public class FloatingWindowService extends Service {
                         boolean enabled = prefs.getBoolean("edge_hide_enabled", false);
                         edgeHideManager.setEnabled(enabled);
                         if (!enabled && edgeHideManager.isHidden()) {
+                            cancelPeekHide();
+                            if (glSurfaceView != null && layoutParams != null) {
+                                refreshScreenSize();
+                                edgeHideManager.expand(glSurfaceView, windowManager, layoutParams,
+                                        screenWidth, screenHeight);
+                            }
+                        } else if (enabled && !edgeHideManager.isHidden()
+                                && glSurfaceView != null && layoutParams != null) {
+                            // Apply immediately: dragging used to be the only
+                            // trigger, so with drag disabled the toggle seemed
+                            // to do nothing
                             refreshScreenSize();
-                            edgeHideManager.expand(glSurfaceView, windowManager, layoutParams,
-                                    screenWidth, screenHeight);
+                            edgeHideManager.snapToEdge(layoutParams, screenWidth, screenHeight);
+                            edgeHideManager.hide(glSurfaceView, windowManager, layoutParams);
                         }
                     }
                 } else if ("motion_enabled".equals(key)) {
@@ -208,6 +227,19 @@ public class FloatingWindowService extends Service {
         // Sound is now triggered from native side (works for menu, hit area, and auto motions)
         Live2DNativeBridge.setMotionSoundCallback((soundPath, delayMs) ->
                 motionSoundPlayer.play(soundPath, delayMs));
+
+        // Model load result: surface native load failures to the user instead
+        // of leaving a blank transparent window with no explanation.
+        Live2DNativeBridge.setModelLoadCallback((success, path) -> mainHandler.post(() -> {
+            lastLoadFailed = !success;
+            if (!success) {
+                android.util.Log.w("DeskPet", "[Service]Model load failed: " + path);
+                Toast.makeText(FloatingWindowService.this,
+                        R.string.toast_model_load_failed, Toast.LENGTH_LONG).show();
+            }
+            NotificationManager nm = getSystemService(NotificationManager.class);
+            nm.notify(NOTIFICATION_ID, buildNotification());
+        }));
 
         // VarFloat change callback: refresh menu when model state changes from native side.
         // Debounced: a single costume change can trigger 5-10 VarFloat updates in rapid succession.
@@ -303,87 +335,116 @@ public class FloatingWindowService extends Service {
             });
         }
 
-        if (intent != null) {
-            String modelPath = intent.getStringExtra(EXTRA_MODEL_PATH);
-            // On crash restart (START_STICKY), intent has no model path.
-            // Reload the last model from SharedPreferences, but limit retries
-            // to prevent crash loops.
-            if (modelPath == null) {
-                // Crash restart (START_STICKY) — don't retry model load, just notify
-                android.util.Log.w("DeskPet", "[Service]Crash restart detected, skipping model reload");
-                Toast.makeText(this, "模型加载异常，请重新选择模型", Toast.LENGTH_LONG).show();
-                return START_STICKY;
+        String modelPath = intent != null ? intent.getStringExtra(EXTRA_MODEL_PATH) : null;
+        String hitAreaConfig = intent != null ? intent.getStringExtra(EXTRA_HIT_AREA_CONFIG) : null;
+        String lookAtConfig = intent != null ? intent.getStringExtra(EXTRA_LOOK_AT_CONFIG) : null;
+        String modelConfig = intent != null ? intent.getStringExtra(EXTRA_MODEL_CONFIG) : null;
+
+        if (modelPath == null) {
+            // Crash restart: START_STICKY relaunch delivers a NULL intent (the
+            // old "intent without path" toast could never fire for it). Try the
+            // last model so the pet comes back on its own, but give up after
+            // repeated crashes so a broken model can't crash-loop the service.
+            SharedPreferences sp = getSharedPreferences(PREF_NAME, MODE_PRIVATE);
+            int crashes = sp.getInt("crash_restart_count", 0);
+            String last = sp.getString("last_model_path", null);
+            if (crashes < 2 && last != null && new File(last).exists()) {
+                sp.edit().putInt("crash_restart_count", crashes + 1).apply();
+                android.util.Log.w("DeskPet", "[Service]Crash restart, reloading last model (attempt "
+                        + (crashes + 1) + ")");
+                modelPath = last;
+                LpkUnpacker.UnpackResult persisted = LpkUnpacker.loadPersistedConfigs(last);
+                if (hitAreaConfig == null) hitAreaConfig = persisted.hitAreaConfig;
+                if (lookAtConfig == null) lookAtConfig = persisted.lookAtConfig;
+                if (modelConfig == null) modelConfig = persisted.modelConfig;
             } else {
-                // Normal start with explicit model path — reset crash counter
-                getSharedPreferences(PREF_NAME, MODE_PRIVATE)
-                        .edit().putInt("crash_restart_count", 0).apply();
+                sp.edit().putInt("crash_restart_count", 0).apply();
+                android.util.Log.w("DeskPet", "[Service]Crash restart giving up, stopping service");
+                Toast.makeText(this, R.string.toast_crash_restart_no_model, Toast.LENGTH_LONG).show();
+                stopSelf();
+                return START_NOT_STICKY;
             }
-            if (isLoadingModel) {
-                Toast.makeText(this, R.string.toast_model_loading, Toast.LENGTH_SHORT).show();
-                return START_STICKY;
-            }
-            isLoadingModel = true;
-            currentModelDir = new File(modelPath).getParent();
-            motionSoundPlayer.setModelDir(currentModelDir);
-
-            broadcastLoadingState(true, modelPath);
-
+        } else {
+            // Normal start with explicit model path — reset crash counter
             getSharedPreferences(PREF_NAME, MODE_PRIVATE)
-                    .edit().putString("last_model_path", modelPath).apply();
-
-            final String path = modelPath;
-            final String hitAreaConfig = intent.getStringExtra(EXTRA_HIT_AREA_CONFIG);
-            final String lookAtConfig = intent.getStringExtra(EXTRA_LOOK_AT_CONFIG);
-            final String modelConfig = intent.getStringExtra(EXTRA_MODEL_CONFIG);
-            final String savedExpression = getSharedPreferences(PREF_NAME, MODE_PRIVATE)
-                    .getString("last_expression", null);
-
-            // Model loading must happen on the GL thread. If the surface isn't ready yet,
-            // defer loading via pendingModelLoad (executed when onSurfaceReady fires).
-            Runnable modelLoadTask = () -> {
-                try {
-                    Live2DNativeBridge.nativeLoadModel(path);
-                    if (hitAreaConfig != null) {
-                        Live2DNativeBridge.nativeSetHitAreaConfig(hitAreaConfig);
-                    }
-                    if (lookAtConfig != null) {
-                        Live2DNativeBridge.nativeSetLookAtConfig(lookAtConfig);
-                    }
-                    if (modelConfig != null) {
-                        Live2DNativeBridge.nativeSetModelConfig(modelConfig);
-                    }
-                    // Apply runtime settings from SharedPreferences
-                    SharedPreferences sp = getSharedPreferences(PREF_NAME, MODE_PRIVATE);
-                    Live2DNativeBridge.nativeSetFollowMode(sp.getInt("follow_mode", 0));
-                    if (sp.getBoolean("random_speak_enable", false)
-                            && sp.getBoolean("motion_enabled", true)) {
-                        Live2DNativeBridge.nativeSetRandomSpeakEnabled(true);
-                        Live2DNativeBridge.nativeSetRandomSpeakInterval(sp.getInt("random_speak_interval", 30));
-                    }
-                    if (sp.getBoolean("debug_hit_areas", false)) {
-                        Live2DNativeBridge.nativeShowHitAreas(true);
-                    }
-                    Live2DNativeBridge.nativeSetExpressionBlendMode(sp.getInt("expression_blend_mode", 0));
-                    Live2DNativeBridge.nativeSetPhysicsWeight(sp.getFloat("physics_weight", 1.0f));
-                    Live2DNativeBridge.nativeSetMirror(sp.getBoolean("model_mirror", false));
-                    Live2DNativeBridge.nativeSetRotation(sp.getFloat("model_rotation", 0f));
-                    if (savedExpression != null && !savedExpression.isEmpty()) {
-                        Live2DNativeBridge.nativeSetExpression(savedExpression);
-                    }
-                } finally {
-                    isLoadingModel = false;
-                    broadcastLoadingState(false, path);
-                }
-            };
-
-            if (surfaceReady) {
-                glSurfaceView.queueEvent(modelLoadTask);
-            } else {
-                pendingModelLoad = modelLoadTask;
-            }
+                    .edit().putInt("crash_restart_count", 0).apply();
         }
 
+        loadModelInternal(modelPath, hitAreaConfig, lookAtConfig, modelConfig);
+
         return START_STICKY;
+    }
+
+    /**
+     * Load a model on the GL thread (deferred until the surface is ready when
+     * necessary). Configs may be null.
+     */
+    private void loadModelInternal(String modelPath, String hitAreaConfig,
+                                   String lookAtConfig, String modelConfig) {
+        if (isLoadingModel) {
+            Toast.makeText(this, R.string.toast_model_loading, Toast.LENGTH_SHORT).show();
+            // The request is dropped here, so tell the UI to clear this
+            // model's loading state — otherwise its button stays "Loading…"
+            broadcastLoadingState(false, modelPath);
+            return;
+        }
+        isLoadingModel = true;
+        lastLoadFailed = false;
+        currentModelDir = new File(modelPath).getParent();
+        motionSoundPlayer.setModelDir(currentModelDir);
+
+        broadcastLoadingState(true, modelPath);
+
+        getSharedPreferences(PREF_NAME, MODE_PRIVATE)
+                .edit().putString("last_model_path", modelPath).apply();
+
+        final String path = modelPath;
+        final String savedExpression = getSharedPreferences(PREF_NAME, MODE_PRIVATE)
+                .getString("last_expression", null);
+
+        // Model loading must happen on the GL thread. If the surface isn't ready yet,
+        // defer loading via pendingModelLoad (executed when onSurfaceReady fires).
+        Runnable modelLoadTask = () -> {
+            try {
+                Live2DNativeBridge.nativeLoadModel(path);
+                if (hitAreaConfig != null) {
+                    Live2DNativeBridge.nativeSetHitAreaConfig(hitAreaConfig);
+                }
+                if (lookAtConfig != null) {
+                    Live2DNativeBridge.nativeSetLookAtConfig(lookAtConfig);
+                }
+                if (modelConfig != null) {
+                    Live2DNativeBridge.nativeSetModelConfig(modelConfig);
+                }
+                // Apply runtime settings from SharedPreferences
+                SharedPreferences sp = getSharedPreferences(PREF_NAME, MODE_PRIVATE);
+                Live2DNativeBridge.nativeSetFollowMode(sp.getInt("follow_mode", 0));
+                if (sp.getBoolean("random_speak_enable", false)
+                        && sp.getBoolean("motion_enabled", true)) {
+                    Live2DNativeBridge.nativeSetRandomSpeakEnabled(true);
+                    Live2DNativeBridge.nativeSetRandomSpeakInterval(sp.getInt("random_speak_interval", 30));
+                }
+                if (sp.getBoolean("debug_hit_areas", false)) {
+                    Live2DNativeBridge.nativeShowHitAreas(true);
+                }
+                Live2DNativeBridge.nativeSetExpressionBlendMode(sp.getInt("expression_blend_mode", 0));
+                Live2DNativeBridge.nativeSetPhysicsWeight(sp.getFloat("physics_weight", 1.0f));
+                Live2DNativeBridge.nativeSetMirror(sp.getBoolean("model_mirror", false));
+                Live2DNativeBridge.nativeSetRotation(sp.getFloat("model_rotation", 0f));
+                if (savedExpression != null && !savedExpression.isEmpty()) {
+                    Live2DNativeBridge.nativeSetExpression(savedExpression);
+                }
+            } finally {
+                isLoadingModel = false;
+                broadcastLoadingState(false, path);
+            }
+        };
+
+        if (surfaceReady) {
+            glSurfaceView.queueEvent(modelLoadTask);
+        } else {
+            pendingModelLoad = modelLoadTask;
+        }
     }
 
     @Override
@@ -393,6 +454,7 @@ public class FloatingWindowService extends Service {
         pendingModelLoad = null;
         cancelLongPress();
         cancelPendingTap();
+        cancelPeekHide();
 
         if (loadingStateListener != null) {
             loadingStateListener.onServiceStopped();
@@ -402,6 +464,7 @@ public class FloatingWindowService extends Service {
         Live2DNativeBridge.setVarFloatChangedCallback(null);
         Live2DNativeBridge.setCostumeChangedCallback(null);
         Live2DNativeBridge.setMotionSoundCallback(null);
+        Live2DNativeBridge.setModelLoadCallback(null);
         motionSoundPlayer.release();
         if (textBubbleOverlay != null) {
             textBubbleOverlay.dismiss();
@@ -410,6 +473,8 @@ public class FloatingWindowService extends Service {
 
         SharedPreferences prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE);
         prefs.unregisterOnSharedPreferenceChangeListener(prefsListener);
+        // Normal shutdown — a future crash should start the retry count fresh
+        prefs.edit().putInt("crash_restart_count", 0).apply();
 
         // Unregister shake sensor
         if (sensorManager != null) {
@@ -480,6 +545,7 @@ public class FloatingWindowService extends Service {
                         layoutParams, glSurfaceView.getWidth(), glSurfaceView.getHeight())) {
                     edgeHideManager.expand(glSurfaceView, windowManager, layoutParams,
                             screenWidth, screenHeight);
+                    schedulePeekHide();
                     return true;
                 }
             }
@@ -500,6 +566,7 @@ public class FloatingWindowService extends Service {
                 isPinching = false;
                 lastPinchDistance = 0;
                 longPressConsumed = false;
+                cancelPeekHide();
                 final float downX = localX;
                 final float downY = localY;
                 glSurfaceView.queueEvent(() ->
@@ -542,12 +609,24 @@ public class FloatingWindowService extends Service {
                         float dy = event.getRawY() - (layoutParams.y + touchOffsetY);
                         if (Math.hypot(dx, dy) > DRAG_THRESHOLD) {
                             isDragging = true;
+                            // Screen may have rotated since the last drag —
+                            // refresh bounds used for clamping below
+                            refreshScreenSize();
                             cancelLongPress();
+                            cancelPeekHide();
                         }
                     }
                     if (isDragging) {
                         layoutParams.x = (int) (event.getRawX() - touchOffsetX);
                         layoutParams.y = (int) (event.getRawY() - touchOffsetY);
+                        // Keep at least half the window on screen so the pet
+                        // can't be dragged off-screen and lost (same clamp the
+                        // startup position applies)
+                        int half = layoutParams.width / 2;
+                        layoutParams.x = Math.max(-half,
+                                Math.min(layoutParams.x, screenWidth - half));
+                        layoutParams.y = Math.max(-half,
+                                Math.min(layoutParams.y, screenHeight - half));
                         windowManager.updateViewLayout(glSurfaceView, layoutParams);
                     }
                 }
@@ -596,6 +675,7 @@ public class FloatingWindowService extends Service {
                 lastPinchDistance = 0;
                 cancelLongPress();
                 cancelPendingTap();
+                cancelPeekHide();
                 glSurfaceView.queueEvent(() ->
                         Live2DNativeBridge.nativeOnTouchesCancelled());
                 return true;
@@ -630,6 +710,7 @@ public class FloatingWindowService extends Service {
                             Live2DNativeBridge.nativeOnTouchesCancelled();
                             Live2DNativeBridge.nativeOnGestureEvent(0, true);
                         });
+                        schedulePeekHide();
                         return true;
                     }
                     lastTapTime = now;
@@ -647,12 +728,14 @@ public class FloatingWindowService extends Service {
                         glSurfaceView.requestRender();
                     };
                     gestureHandler.postDelayed(pendingTapRunnable, DOUBLE_TAP_MS);
+                    schedulePeekHide();
                 } else {
                     // Drag ended — must notify native so _captured and _touchActive reset.
                     final float endX = localX;
                     final float endY = localY;
                     glSurfaceView.queueEvent(() ->
                             Live2DNativeBridge.nativeOnTouchesEnded(endX, endY, true));
+                    cancelPeekHide();
                     getSharedPreferences(PREF_NAME, MODE_PRIVATE)
                             .edit()
                             .putInt("window_x", layoutParams.x)
@@ -681,11 +764,12 @@ public class FloatingWindowService extends Service {
     @SuppressLint("ClickableViewAccessibility")
     private void scheduleLongPress() {
         cancelLongPress();
-        longPressRunnable = () -> {
-            longPressRunnable = null;
-            if (isDragging || wasPinching || isPinching) return;
-            longPressConsumed = true;
-            glSurfaceView.queueEvent(() -> {
+            longPressRunnable = () -> {
+                longPressRunnable = null;
+                if (isDragging || wasPinching || isPinching) return;
+                longPressConsumed = true;
+                cancelPeekHide();
+                glSurfaceView.queueEvent(() -> {
                 Live2DNativeBridge.nativeOnTouchesCancelled();
                 Live2DNativeBridge.nativeOnGestureEvent(1, true);
             });
@@ -709,6 +793,30 @@ public class FloatingWindowService extends Service {
         if (pendingTapRunnable != null) {
             gestureHandler.removeCallbacks(pendingTapRunnable);
             pendingTapRunnable = null;
+        }
+    }
+
+    /** Re-hide the expanded pet EDGE_PEEK_HIDE_MS after the last touch. */
+    private void schedulePeekHide() {
+        cancelPeekHide();
+        peekHideRunnable = () -> {
+            peekHideRunnable = null;
+            if (glSurfaceView == null || layoutParams == null
+                    || edgeHideManager == null || !edgeHideManager.isEnabled()
+                    || edgeHideManager.isHidden()) {
+                return;
+            }
+            refreshScreenSize();
+            edgeHideManager.snapToEdge(layoutParams, screenWidth, screenHeight);
+            edgeHideManager.hide(glSurfaceView, windowManager, layoutParams);
+        };
+        mainHandler.postDelayed(peekHideRunnable, EDGE_PEEK_HIDE_MS);
+    }
+
+    private void cancelPeekHide() {
+        if (peekHideRunnable != null) {
+            mainHandler.removeCallbacks(peekHideRunnable);
+            peekHideRunnable = null;
         }
     }
 
@@ -787,6 +895,8 @@ public class FloatingWindowService extends Service {
         String statusText;
         if (isLoadingModel) {
             statusText = getString(R.string.notif_loading);
+        } else if (lastLoadFailed) {
+            statusText = getString(R.string.notif_load_failed);
         } else if (clickThrough) {
             statusText = getString(R.string.notif_click_through);
         } else {

@@ -54,6 +54,28 @@
     <string name="dialog_both_disabled_message">拖拽和长按菜单同时关闭，可能导致无法交互或无法打开菜单重新启用。</string>
     <string name="dialog_both_disabled_confirm">仍然关闭</string>
 
+    <!-- Import UX / robustness -->
+    <string name="dialog_no_model_title">尚未导入模型</string>
+    <string name="dialog_no_model_message">还没有可用的模型。\n请先在「导入模型」区域导入模型文件夹或 LPK/WPK 包，再启动桌宠。</string>
+    <string name="dialog_pick_again">重新选择</string>
+    <string name="err_not_lpk">所选文件不是有效的 LPK/WPK 包，或文件已损坏。</string>
+    <string name="err_folder_empty">所选文件夹为空。</string>
+    <string name="err_no_model_json">未在所选内容中找到模型文件（.model3.json / .model.json）。</string>
+    <string name="err_import_io">导入过程中发生读写错误。</string>
+    <string name="err_lpk_unpack">LPK 包解析失败，可能是不受支持的格式或已损坏。</string>
+    <string name="import_cancelled">已取消导入</string>
+    <string name="import_status_cancelling">正在取消…</string>
+    <string name="import_status_scanning">正在扫描文件夹…</string>
+    <string name="import_status_working">正在导入…</string>
+    <string name="import_status_reading">正在读取文件…</string>
+    <string name="import_status_percent">正在读取文件… %1$d%%</string>
+    <string name="import_status_unpacking">正在解包…</string>
+    <string name="import_status_files">正在导入… %1$d/%2$d 个文件</string>
+    <string name="toast_crash_restart_no_model">模型加载异常，请重新选择模型</string>
+    <string name="toast_model_load_failed">模型加载失败，请尝试重新导入或选择其他模型</string>
+    <string name="notif_load_failed">模型加载失败</string>
+    <string name="toast_rename_stop_pet_first">该模型正在运行，请先停止桌宠再重命名</string>
+
     <!-- Birthday -->
     <string name="birthday_not_set">未设置（生日动作将隐藏）</string>
     <string name="birthday_set">生日：%1$d月%2$d日</string>

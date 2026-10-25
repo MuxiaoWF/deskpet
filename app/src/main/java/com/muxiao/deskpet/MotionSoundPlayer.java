@@ -25,6 +25,7 @@ public class MotionSoundPlayer {
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private MediaPlayer currentPlayer;
+    private Runnable pendingPlayTask;
     private String modelDir;
 
     public void setModelDir(String dir) {
@@ -81,14 +82,25 @@ public class MotionSoundPlayer {
             }
         };
 
+        // A new request supersedes any still-pending delayed play
+        cancelPendingPlay();
         if (delayMs > 0) {
+            pendingPlayTask = playTask;
             mainHandler.postDelayed(playTask, delayMs);
         } else {
             mainHandler.post(playTask);
         }
     }
 
+    private void cancelPendingPlay() {
+        if (pendingPlayTask != null) {
+            mainHandler.removeCallbacks(pendingPlayTask);
+            pendingPlayTask = null;
+        }
+    }
+
     public void release() {
+        cancelPendingPlay();
         mainHandler.post(this::releaseInternal);
     }
 

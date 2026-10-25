@@ -1,6 +1,7 @@
 package com.muxiao.deskpet;
 
 import android.content.Context;
+import android.database.Cursor;
 import android.net.Uri;
 import android.util.Log;
 
@@ -18,6 +19,7 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Unpacks Live2D LPK/WPK package files.
@@ -34,7 +36,24 @@ public class LpkUnpacker {
     private static final java.util.regex.Pattern ENC_FILE_PATTERN =
             java.util.regex.Pattern.compile("[0-9a-fA-F]{32}\\.bin3?");
 
+    // Failure reasons exposed via getLastError() so the UI can show a
+    // specific message and skip pointless retry buttons
+    public static final String ERR_NOT_ZIP = "not_zip";
+    public static final String ERR_NO_CONFIG = "no_config";
+    public static final String ERR_NO_MODEL_JSON = "no_model_json";
+    public static final String ERR_UNPACK = "unpack";
+    public static final String ERR_IO = "io";
+    public static final String ERR_CANCELLED = "cancelled";
+
+    /** Thrown internally when the user cancels a running import. */
+    private static class CancelledException extends Exception {}
+
     private final Context context;
+    /** Directories created during unpack; cleaned up on failure/cancel. */
+    private final java.util.List<File> createdDirs = new java.util.ArrayList<>();
+    private volatile AtomicBoolean cancelFlag;
+    private volatile ImportProgressListener progress;
+    private volatile String lastError;
 
     /**
      * Result of unpacking an LPK/WPK file.
@@ -65,6 +84,35 @@ public class LpkUnpacker {
         this.context = context;
     }
 
+    /** Reason of the last failure, or null if the last unpack succeeded. */
+    public String getLastError() {
+        return lastError;
+    }
+
+    /** Record a failure reason and produce the null result callers expect. */
+    private String fail(String code) {
+        lastError = code;
+        return null;
+    }
+
+    private void checkCancelled() throws CancelledException {
+        if (cancelFlag != null && cancelFlag.get()) throw new CancelledException();
+    }
+
+    private void cleanupCreatedDirs() {
+        for (File dir : createdDirs) {
+            if (dir.exists()) {
+                Log.i(TAG, "Cleaning up partial extraction: " + dir.getAbsolutePath());
+                FileUtils.deleteRecursive(dir);
+            }
+        }
+    }
+
+    private void reportProgress(int stage, int done, int total) {
+        ImportProgressListener p = progress;
+        if (p != null) p.onProgress(stage, done, total);
+    }
+
     /**
      * Unpack an LPK/WPK file with an optional custom model name.
      *
@@ -73,109 +121,156 @@ public class LpkUnpacker {
      * @return absolute path to the extracted .model.json or .model3.json, or null on failure
      */
     public String unpack(Uri lpkUri, String customName) {
+        return unpack(lpkUri, customName, null, null);
+    }
+
+    /**
+     * Unpack an LPK/WPK file with cancel and progress support.
+     *
+     * @param cancelFlag when set to true, aborts the unpack and cleans up (nullable)
+     * @param progress   progress callback (nullable)
+     */
+    public String unpack(Uri lpkUri, String customName,
+                         AtomicBoolean cancelFlag, ImportProgressListener progress) {
         lastExtractedPreviewPath = null;
         lastMlveRaw = null;
+        lastError = null;
+        createdDirs.clear();
+        this.cancelFlag = cancelFlag;
+        this.progress = progress;
         File tempLpk = null;
         try {
             tempLpk = new File(context.getCacheDir(), "temp_lpk_" + System.currentTimeMillis() + ".lpk");
-            copyUriToFile(lpkUri, tempLpk);
+            copyUriToFile(lpkUri, tempLpk, progress);
             Log.i(TAG, "LPK file copied to: " + tempLpk.getAbsolutePath() + " size=" + tempLpk.length());
+            if (tempLpk.length() == 0) {
+                return fail(ERR_NOT_ZIP);
+            }
 
             try (ZipFile zip = new ZipFile(tempLpk)) {
                 Log.i(TAG, "ZIP entries count: " + zip.size());
-
-                byte[] outerPreview = findPreviewInZip(zip);
-                String mlveRaw = readMlveConfig(zip);
-
-                if (mlveRaw == null) {
-                    Log.i(TAG, "No config.mlve found, checking for nested LPK...");
-                    String nestedLpkPath = findNestedLpk(zip);
-                    if (nestedLpkPath != null) {
-                        Log.i(TAG, "Found nested LPK: " + nestedLpkPath);
-                        JSONObject configJson = readConfigJson(zip);
-                        // Extract title from outer WPK config.json for auto-naming
-                        String wpkTitle = null;
-                        if (configJson != null) {
-                            String t = configJson.optString("title", "");
-                            if (!t.isEmpty()) wpkTitle = t;
-                        }
-                        return extractNestedLpk(zip, nestedLpkPath, configJson, outerPreview, customName, wpkTitle);
-                    }
-                    Log.e(TAG, "Failed to find config.mlve or nested LPK");
-                    return null;
-                }
-
-                JSONObject mlve = new JSONObject(mlveRaw);
-                String lpkType = mlve.optString("type", "STD_1_0");
-                String lpkId = mlve.optString("id", "");
-                String keyId = mlve.optString("keyId", lpkId);
-                boolean encrypted = parseEncryptField(mlve);
-
-                Log.i(TAG, "LPK type=" + lpkType + " id=" + lpkId + " keyId=" + keyId + " encrypted=" + encrypted);
-
-                int sdkVersion = detectSdkVersion(mlve);
-                Log.i(TAG, "Detected SDK version: " + sdkVersion);
-
-                lastMlveRaw = mlveRaw;
-
-                // Extract fileId/metaData for STM_1_0 key generation
-                String fileId = mlve.optString("fileId", null);
-                String metaData = mlve.optString("metaData", null);
-
-                String modelJsonPath;
-
-                if ("STD2_0".equals(lpkType) || "STM_1_0".equals(lpkType)) {
-                    modelJsonPath = extractStructured(zip, mlve, lpkType, keyId, fileId, metaData, customName);
-                } else {
-                    String modelName = (customName != null && !customName.isEmpty())
-                            ? customName : "lpk_model_" + System.currentTimeMillis();
-                    File outDir = new File(context.getFilesDir(), "models/" + sanitizeForDirName(modelName));
-                    outDir.mkdirs();
-                    modelJsonPath = extractFlat(zip, lpkType, keyId, null, null, encrypted, outDir);
-                }
-
-                if (modelJsonPath != null) {
-                    File modelDir = new File(modelJsonPath).getParentFile();
-                    if (modelDir != null) {
-                        File mlveFile = new File(modelDir, "config.mlve");
-                        if (!mlveFile.exists()) {
-                            FileUtils.writeFile(mlveFile, mlveRaw.getBytes(StandardCharsets.UTF_8));
-                            Log.i(TAG, "Saved config.mlve to: " + mlveFile.getAbsolutePath());
-                        }
-                    }
-                }
-
-                if (modelJsonPath != null && outerPreview != null) {
-                    File modelDir = new File(modelJsonPath).getParentFile();
-                    if (modelDir != null) {
-                        File previewFile = new File(modelDir, "preview.png");
-                        FileUtils.writeFile(previewFile, outerPreview);
-                lastExtractedPreviewPath = previewFile.getAbsolutePath();
-                Log.i(TAG, "Saved preview: " + previewFile.getAbsolutePath());
-                    }
-                }
-
-                if (modelJsonPath != null) {
-                    Log.i(TAG, "LPK extracted to: " + modelJsonPath);
-                } else {
-                    Log.e(TAG, "Failed to extract model JSON from LPK");
-                }
-                return modelJsonPath;
+                reportProgress(ImportProgressListener.STAGE_UNPACK, -1, -1);
+                return unpackZip(zip, customName);
             }
+        } catch (CancelledException e) {
+            Log.i(TAG, "LPK unpack cancelled by user");
+            return fail(ERR_CANCELLED);
+        } catch (java.util.zip.ZipException e) {
+            Log.e(TAG, "Not a valid ZIP/LPK archive", e);
+            return fail(ERR_NOT_ZIP);
         } catch (Exception e) {
             Log.e(TAG, "Failed to unpack LPK", e);
-            return null;
+            return fail(ERR_IO);
         } finally {
             if (tempLpk != null) tempLpk.delete();
+            if (lastError != null) {
+                cleanupCreatedDirs();
+                lastExtractedPreviewPath = null;
+            }
         }
+    }
+
+    /**
+     * Core unpack logic operating on an already-opened ZIP.
+     * All failure paths must return via {@link #fail(String)} so that
+     * cleanup and error reporting stay consistent.
+     */
+    private String unpackZip(ZipFile zip, String customName) throws Exception {
+        byte[] outerPreview = findPreviewInZip(zip);
+        String mlveRaw = readMlveConfig(zip);
+
+        if (mlveRaw == null) {
+            Log.i(TAG, "No config.mlve found, checking for nested LPK...");
+            String nestedLpkPath = findNestedLpk(zip);
+            if (nestedLpkPath != null) {
+                Log.i(TAG, "Found nested LPK: " + nestedLpkPath);
+                JSONObject configJson = readConfigJson(zip);
+                // Extract title from outer WPK config.json for auto-naming
+                String wpkTitle = null;
+                if (configJson != null) {
+                    String t = configJson.optString("title", "");
+                    if (!t.isEmpty()) wpkTitle = t;
+                }
+                return extractNestedLpk(zip, nestedLpkPath, configJson, outerPreview, customName, wpkTitle);
+            }
+            Log.e(TAG, "Failed to find config.mlve or nested LPK");
+            return fail(ERR_NO_CONFIG);
+        }
+
+        JSONObject mlve = new JSONObject(mlveRaw);
+        String lpkType = mlve.optString("type", "STD_1_0");
+        String lpkId = mlve.optString("id", "");
+        String keyId = mlve.optString("keyId", lpkId);
+        boolean encrypted = parseEncryptField(mlve);
+
+        Log.i(TAG, "LPK type=" + lpkType + " id=" + lpkId + " keyId=" + keyId + " encrypted=" + encrypted);
+
+        int sdkVersion = detectSdkVersion(mlve);
+        Log.i(TAG, "Detected SDK version: " + sdkVersion);
+
+        lastMlveRaw = mlveRaw;
+
+        // Extract fileId/metaData for STM_1_0 key generation
+        String fileId = mlve.optString("fileId", null);
+        String metaData = mlve.optString("metaData", null);
+
+        String modelJsonPath;
+
+        if ("STD2_0".equals(lpkType) || "STM_1_0".equals(lpkType)) {
+            modelJsonPath = extractStructured(zip, mlve, lpkType, keyId, fileId, metaData, customName);
+        } else {
+            String modelName = (customName != null && !customName.isEmpty())
+                    ? customName : "lpk_model_" + System.currentTimeMillis();
+            File outDir = new File(context.getFilesDir(), "models/" + sanitizeForDirName(modelName));
+            outDir.mkdirs();
+            createdDirs.add(outDir);
+            modelJsonPath = extractFlat(zip, lpkType, keyId, null, null, encrypted, outDir);
+        }
+
+        if (modelJsonPath != null) {
+            File modelDir = new File(modelJsonPath).getParentFile();
+            if (modelDir != null) {
+                File mlveFile = new File(modelDir, "config.mlve");
+                if (!mlveFile.exists()) {
+                    FileUtils.writeFile(mlveFile, mlveRaw.getBytes(StandardCharsets.UTF_8));
+                    Log.i(TAG, "Saved config.mlve to: " + mlveFile.getAbsolutePath());
+                }
+            }
+        }
+
+        if (modelJsonPath != null && outerPreview != null) {
+            File modelDir = new File(modelJsonPath).getParentFile();
+            if (modelDir != null) {
+                File previewFile = new File(modelDir, "preview.png");
+                FileUtils.writeFile(previewFile, outerPreview);
+                lastExtractedPreviewPath = previewFile.getAbsolutePath();
+                Log.i(TAG, "Saved preview: " + previewFile.getAbsolutePath());
+            }
+        }
+
+        if (modelJsonPath != null) {
+            Log.i(TAG, "LPK extracted to: " + modelJsonPath);
+        } else {
+            Log.e(TAG, "Failed to extract model JSON from LPK");
+            if (lastError == null) lastError = ERR_UNPACK;
+        }
+        return modelJsonPath;
     }
 
     /**
      * Unpack an LPK/WPK file and return full config data.
      */
     public UnpackResult unpackWithConfig(Uri lpkUri, String customName) {
+        return unpackWithConfig(lpkUri, customName, null, null);
+    }
+
+    /**
+     * Unpack an LPK/WPK file and return full config data, with cancel and progress support.
+     */
+    public UnpackResult unpackWithConfig(Uri lpkUri, String customName,
+                                         AtomicBoolean cancelFlag, ImportProgressListener progress) {
         // Step 1: Unpack model (handles decryption, SDK conversion, preview extraction)
-        String modelPath = unpack(lpkUri, customName);
+        String modelPath = unpack(lpkUri, customName, cancelFlag, progress);
         if (modelPath == null) return null;
 
         File modelDir = new File(modelPath).getParentFile();
@@ -635,7 +730,7 @@ public class LpkUnpacker {
         byte[] nestedLpkData = readEntry(zip, nestedLpkPath);
         if (nestedLpkData == null) {
             Log.e(TAG, "Failed to read nested LPK: " + nestedLpkPath);
-            return null;
+            return fail(ERR_UNPACK);
         }
 
         // Write nested LPK to temp file
@@ -652,7 +747,7 @@ public class LpkUnpacker {
             if (mlveRaw == null) {
                 Log.e(TAG, "Failed to find config.mlve in nested LPK");
                 nestedLpkFile.delete();
-                return null;
+                return fail(ERR_NO_CONFIG);
             }
 
             JSONObject mlve = new JSONObject(mlveRaw);
@@ -686,6 +781,7 @@ public class LpkUnpacker {
                         ? resolvedName : "lpk_model_" + System.currentTimeMillis();
                 File outDir = new File(context.getFilesDir(), "models/" + sanitizeForDirName(modelName));
                 outDir.mkdirs();
+                createdDirs.add(outDir);
                 modelJsonPath = extractFlat(nestedZip, lpkType, keyId, null, null, encrypted, outDir);
             }
 
@@ -718,6 +814,7 @@ public class LpkUnpacker {
             Log.i(TAG, "Nested LPK extracted to: " + modelJsonPath);
         } else {
             Log.e(TAG, "Failed to extract model JSON from nested LPK");
+            if (lastError == null) lastError = ERR_UNPACK;
         }
         return modelJsonPath;
     }
@@ -732,11 +829,12 @@ public class LpkUnpacker {
                 ? customName : "lpk_model_" + System.currentTimeMillis();
         File outDir = new File(context.getFilesDir(), "models/" + sanitizeForDirName(modelName));
         outDir.mkdirs();
+        createdDirs.add(outDir);
 
         JSONArray list = mlve.optJSONArray("list");
         if (list == null || list.length() == 0) {
             Log.e(TAG, "No characters in LPK config");
-            return null;
+            return fail(ERR_UNPACK);
         }
 
         // Use the first character's first costume
@@ -745,14 +843,14 @@ public class LpkUnpacker {
         JSONArray costumes = chara.optJSONArray("costume");
         if (costumes == null || costumes.length() == 0) {
             Log.e(TAG, "No costumes in LPK config");
-            return null;
+            return fail(ERR_UNPACK);
         }
 
         JSONObject costume = costumes.getJSONObject(0);
         String costumePath = costume.optString("path", "");
         if (costumePath.isEmpty()) {
             Log.e(TAG, "Empty costume path");
-            return null;
+            return fail(ERR_UNPACK);
         }
 
         Log.i(TAG, "Extracting costume: " + costumePath);
@@ -761,7 +859,7 @@ public class LpkUnpacker {
         byte[] modelJsonBytes = decryptFile(zip, lpkType, keyId, fileId, metaData, costumePath);
         if (modelJsonBytes == null) {
             Log.e(TAG, "Failed to decrypt model JSON: " + costumePath);
-            return null;
+            return fail(ERR_UNPACK);
         }
 
         String modelJsonStr = new String(modelJsonBytes, StandardCharsets.UTF_8);
@@ -771,7 +869,7 @@ public class LpkUnpacker {
         } catch (Exception e) {
             Log.e(TAG, "Failed to parse model JSON: " + e.getMessage());
             Log.e(TAG, "Raw content: " + modelJsonStr.substring(0, Math.min(500, modelJsonStr.length())));
-            return null;
+            return fail(ERR_UNPACK);
         }
 
         int sdkVersion = detectSdkVersion(mlve);
@@ -795,6 +893,7 @@ public class LpkUnpacker {
         int skippedCount = 0;
         Enumeration<? extends ZipEntry> allEntries = zip.entries();
         while (allEntries.hasMoreElements()) {
+            checkCancelled();
             ZipEntry entry = allEntries.nextElement();
             if (entry.isDirectory()) continue;
             String entryName = entry.getName();
@@ -901,9 +1000,16 @@ public class LpkUnpacker {
 
         Log.i(TAG, "Extracting flat format, encrypted=" + encrypted);
 
+        int total = zip.size();
+        int done = 0;
         Enumeration<? extends ZipEntry> entries = zip.entries();
         while (entries.hasMoreElements()) {
+            checkCancelled();
             ZipEntry entry = entries.nextElement();
+            if (!entry.isDirectory()) {
+                done++;
+                reportProgress(ImportProgressListener.STAGE_UNPACK, done, Math.max(done, total));
+            }
             if (entry.isDirectory()) continue;
 
             String name = entry.getName();
@@ -943,6 +1049,9 @@ public class LpkUnpacker {
             modelJsonPath = findModelJsonInDir(outDir);
             if (modelJsonPath != null) {
                 Log.i(TAG, "Found model JSON in directory: " + modelJsonPath);
+            } else {
+                Log.e(TAG, "No model JSON (.model3.json/.model.json) found in package");
+                return fail(ERR_NO_MODEL_JSON);
             }
         }
 
@@ -1009,6 +1118,7 @@ public class LpkUnpacker {
                                        String value, File outDir,
                                        java.util.Map<String, String> nameMapping,
                                        java.util.Set<String> extractedEntries) throws Exception {
+        checkCancelled();
         if (nameMapping.containsKey(value)) return nameMapping.get(value); // already extracted
 
         // Extract the basename for encrypted filename detection
@@ -1708,11 +1818,46 @@ public class LpkUnpacker {
         }
     }
 
-    private void copyUriToFile(Uri uri, File dest) throws Exception {
+    private void copyUriToFile(Uri uri, File dest, ImportProgressListener progress) throws Exception {
+        Long total = queryDocumentSize(uri);
         try (InputStream is = context.getContentResolver().openInputStream(uri);
              FileOutputStream fos = new FileOutputStream(dest)) {
-            FileUtils.copyStream(Objects.requireNonNull(is), fos);
+            Objects.requireNonNull(is);
+            if (total == null || total <= 0) {
+                reportProgress(ImportProgressListener.STAGE_COPY, -1, -1);
+            }
+            byte[] buf = new byte[8192];
+            long copied = 0;
+            int lastPct = -1;
+            int len;
+            while ((len = is.read(buf)) > 0) {
+                checkCancelled();
+                fos.write(buf, 0, len);
+                copied += len;
+                if (total != null && total > 0) {
+                    int pct = (int) Math.min(100, copied * 100 / total);
+                    if (pct != lastPct) {
+                        lastPct = pct;
+                        reportProgress(ImportProgressListener.STAGE_COPY, pct, 100);
+                    }
+                }
+            }
         }
+    }
+
+    /** Look up the document size behind a SAF URI, or null when unknown. */
+    private Long queryDocumentSize(Uri uri) {
+        try (Cursor c = context.getContentResolver().query(uri, null, null, null, null)) {
+            if (c != null && c.moveToFirst()) {
+                int idx = c.getColumnIndex(android.provider.OpenableColumns.SIZE);
+                if (idx >= 0 && !c.isNull(idx)) {
+                    long size = c.getLong(idx);
+                    if (size > 0) return size;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
     }
 
     /**

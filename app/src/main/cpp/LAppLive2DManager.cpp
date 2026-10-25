@@ -1906,11 +1906,13 @@ void LAppLive2DManager::LoadModelFromPath(const char *modelPath) {
             }
             LAppPal::PrintLogLn("[APP]LoadModel OK (Cubism3+), models=%d render=%dx%d",
                                 (int) _models.GetSize(), (int) _renderWidth, (int) _renderHeight);
+            JniBridgeC::NotifyModelLoadResult(true, modelPath);
             AutoGenerateHitAreas();
             // Start the looping idle motion so the pet animates right after load
             StartIdleMotionFor(model);
         } else {
             LAppPal::PrintLogLn("[APP]LoadModel failed, model is null: %s", modelPath);
+            JniBridgeC::NotifyModelLoadResult(false, modelPath);
             delete model;
         }
     } else if (fnLen > 10 && strcmp(fn + fnLen - 10, ".model.json") == 0) {
@@ -1926,15 +1928,18 @@ void LAppLive2DManager::LoadModelFromPath(const char *modelPath) {
             LAppPal::PrintLogLn("[APP]LoadModel OK (Cubism2), models=%d render=%dx%d",
                                 (int) _modelsCubism2.GetSize(), (int) _renderWidth,
                                 (int) _renderHeight);
+            JniBridgeC::NotifyModelLoadResult(true, modelPath);
             AutoGenerateHitAreas();
             AutoPopulateHitAreaParams();
         } else {
             LAppPal::PrintLogLn("[APP]LoadModel failed (cubism2), model not initialized: %s",
                                 modelPath);
+            JniBridgeC::NotifyModelLoadResult(false, modelPath);
             delete model;
         }
     } else {
         LAppPal::PrintLogLn("[APP]Unknown model format: %s", fn);
+        JniBridgeC::NotifyModelLoadResult(false, modelPath);
     }
 
     // Always parse model3.json for VarFloat definitions and merge into _modelConfig.
