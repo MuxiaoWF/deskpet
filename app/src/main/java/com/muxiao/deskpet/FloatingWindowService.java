@@ -83,7 +83,6 @@ public class FloatingWindowService extends Service {
 
     private float touchOffsetX, touchOffsetY;
     private boolean isDragging;
-    private long touchDownTime;
 
     private float scaleFactor = 1.0f;
 
@@ -100,6 +99,15 @@ public class FloatingWindowService extends Service {
     private EdgeHideManager edgeHideManager;
     private TextBubbleOverlay textBubbleOverlay;
     private int screenWidth, screenHeight;
+
+    // Gesture timing. Single-tap dispatch is delayed by DOUBLE_TAP_MS so a
+    // quick second tap is recognized as a double-tap instead of playing the
+    // single-tap motion first. Long-press fires while holding (standard
+    // Android behavior), not on finger release.
+    private final android.os.Handler gestureHandler = new android.os.Handler(Looper.getMainLooper());
+    private Runnable pendingTapRunnable;
+    private Runnable longPressRunnable;
+    private boolean longPressConsumed;
 
     // Pinch gesture detection
     private float lastPinchDistance = 0;
@@ -383,6 +391,8 @@ public class FloatingWindowService extends Service {
         serviceRunning = false;
         surfaceReady = false;
         pendingModelLoad = null;
+        cancelLongPress();
+        cancelPendingTap();
 
         if (loadingStateListener != null) {
             loadingStateListener.onServiceStopped();
@@ -489,12 +499,13 @@ public class FloatingWindowService extends Service {
                 wasPinching = false;
                 isPinching = false;
                 lastPinchDistance = 0;
-                touchDownTime = System.currentTimeMillis();
+                longPressConsumed = false;
                 final float downX = localX;
                 final float downY = localY;
                 glSurfaceView.queueEvent(() ->
                         Live2DNativeBridge.nativeOnTouchesBegan(downX, downY));
                 glSurfaceView.requestRender();
+                scheduleLongPress();
                 return true;
 
             case MotionEvent.ACTION_MOVE:
@@ -520,14 +531,10 @@ public class FloatingWindowService extends Service {
                     return true;
                 }
 
-                if (wasPinching) {
-                    // Ignore single-finger moves after a pinch occurred
+                if (wasPinching || longPressConsumed) {
+                    // Ignore moves after a pinch or after the long-press menu fired
                     return true;
                 }
-
-                // Update localX/localY so ACTION_UP uses the current finger position
-                localX = event.getX();
-                localY = event.getY();
 
                 if (dragEnabled) {
                     if (!isDragging) {
@@ -535,6 +542,7 @@ public class FloatingWindowService extends Service {
                         float dy = event.getRawY() - (layoutParams.y + touchOffsetY);
                         if (Math.hypot(dx, dy) > DRAG_THRESHOLD) {
                             isDragging = true;
+                            cancelLongPress();
                         }
                     }
                     if (isDragging) {
@@ -568,6 +576,8 @@ public class FloatingWindowService extends Service {
                     lastPinchDistance = getFingerDistance(event);
                     isPinching = true;
                     wasPinching = true;
+                    cancelLongPress();
+                    cancelPendingTap();
                 }
                 return true;
 
@@ -584,6 +594,8 @@ public class FloatingWindowService extends Service {
                 isPinching = false;
                 wasPinching = false;
                 lastPinchDistance = 0;
+                cancelLongPress();
+                cancelPendingTap();
                 glSurfaceView.queueEvent(() ->
                         Live2DNativeBridge.nativeOnTouchesCancelled());
                 return true;
@@ -591,6 +603,7 @@ public class FloatingWindowService extends Service {
             case MotionEvent.ACTION_UP:
                 isPinching = false;
                 lastPinchDistance = 0;
+                cancelLongPress();
                 // Skip tap/long-press/double-tap if a pinch just occurred
                 if (wasPinching) {
                     wasPinching = false;
@@ -599,42 +612,41 @@ public class FloatingWindowService extends Service {
                     return true;
                 }
                 wasPinching = false;
-                long duration = System.currentTimeMillis() - touchDownTime;
                 if (!isDragging) {
                     v.performClick();
-                    if (duration >= LONG_PRESS_MS) {
-                        // Long-press: cancel touch tracking (without triggering hit/release
-                        // behavior), then fire gesture event + menu.
-                        glSurfaceView.queueEvent(() -> {
-                            Live2DNativeBridge.nativeOnTouchesCancelled();
-                            Live2DNativeBridge.nativeOnGestureEvent(1, true);
-                        });
-                        boolean menuEnabled = getSharedPreferences(PREF_NAME, MODE_PRIVATE)
-                                .getBoolean("long_press_menu_enable", true);
-                        if (menuEnabled && currentModelDir != null) {
-                            actionMenuManager.show(FloatingWindowService.this, glSurfaceView, currentModelDir);
-                        }
+                    if (longPressConsumed) {
+                        // Long-press already fired while holding (native touch was
+                        // cancelled and the menu shown); nothing left to do.
+                        longPressConsumed = false;
                         return true;
                     }
                     long now = System.currentTimeMillis();
                     if (now - lastTapTime < DOUBLE_TAP_MS) {
-                        // Double-tap: cancel the ongoing touch to reset native hit area state
-                        // (_pressedHitAreaIndex, ParamHit, etc.), then fire gesture event.
+                        // Double-tap: cancel the pending single-tap dispatch (set up by
+                        // the first tap), reset native hit state, then fire the gesture.
+                        cancelPendingTap();
+                        lastTapTime = 0; // Reset so the next tap isn't misdetected as double
                         glSurfaceView.queueEvent(() -> {
                             Live2DNativeBridge.nativeOnTouchesCancelled();
                             Live2DNativeBridge.nativeOnGestureEvent(0, true);
                         });
-                        lastTapTime = 0; // Reset to prevent next single tap from being misdetected as double-tap
                         return true;
                     }
                     lastTapTime = now;
 
-                    // Single tap: fire touchesEnded for model hit detection
+                    // Single tap: dispatch after the double-tap window so a quick
+                    // second tap cancels it instead of stacking both animations.
                     final float tapX = localX;
                     final float tapY = localY;
-                    glSurfaceView.queueEvent(() ->
-                            Live2DNativeBridge.nativeOnTouchesEnded(tapX, tapY, false));
-                    glSurfaceView.requestRender();
+                    cancelPendingTap();
+                    pendingTapRunnable = () -> {
+                        pendingTapRunnable = null;
+                        if (glSurfaceView == null) return;
+                        glSurfaceView.queueEvent(() ->
+                                Live2DNativeBridge.nativeOnTouchesEnded(tapX, tapY, false));
+                        glSurfaceView.requestRender();
+                    };
+                    gestureHandler.postDelayed(pendingTapRunnable, DOUBLE_TAP_MS);
                 } else {
                     // Drag ended — must notify native so _captured and _touchActive reset.
                     final float endX = localX;
@@ -659,6 +671,45 @@ public class FloatingWindowService extends Service {
                 return true;
         }
         return false;
+    }
+
+    /**
+     * Standard long-press: fires while the finger is still down (500ms), not on
+     * release. Cancels native touch tracking, fires the long-press gesture event
+     * and opens the action menu.
+     */
+    @SuppressLint("ClickableViewAccessibility")
+    private void scheduleLongPress() {
+        cancelLongPress();
+        longPressRunnable = () -> {
+            longPressRunnable = null;
+            if (isDragging || wasPinching || isPinching) return;
+            longPressConsumed = true;
+            glSurfaceView.queueEvent(() -> {
+                Live2DNativeBridge.nativeOnTouchesCancelled();
+                Live2DNativeBridge.nativeOnGestureEvent(1, true);
+            });
+            boolean menuEnabled = getSharedPreferences(PREF_NAME, MODE_PRIVATE)
+                    .getBoolean("long_press_menu_enable", true);
+            if (menuEnabled && currentModelDir != null) {
+                actionMenuManager.show(FloatingWindowService.this, glSurfaceView, currentModelDir);
+            }
+        };
+        gestureHandler.postDelayed(longPressRunnable, LONG_PRESS_MS);
+    }
+
+    private void cancelLongPress() {
+        if (longPressRunnable != null) {
+            gestureHandler.removeCallbacks(longPressRunnable);
+            longPressRunnable = null;
+        }
+    }
+
+    private void cancelPendingTap() {
+        if (pendingTapRunnable != null) {
+            gestureHandler.removeCallbacks(pendingTapRunnable);
+            pendingTapRunnable = null;
+        }
     }
 
     private void setClickThrough(boolean enabled) {

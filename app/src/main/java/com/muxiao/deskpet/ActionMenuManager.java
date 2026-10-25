@@ -403,11 +403,22 @@ public class ActionMenuManager {
 
         int[] location = new int[2];
         anchor.getLocationOnScreen(location);
-        Live2DNativeBridge.nativeSetMenuVisible(true);
-        popupWindow.showAtLocation(anchor, Gravity.NO_GRAVITY,
-                location[0] + anchor.getWidth() / 2,
-                location[1] - 10);
-        Log.d(TAG, "show() popup displayed at (" + location[0] + ", " + location[1] + ") menuLayout childCount=" + menuLayout.getChildCount());
+        // Clamp so the menu stays on screen when the pet is near the right/top edge
+        int menuWidth = Math.min(dp(context, 240), dm.widthPixels - dp(context, 40));
+        int menuX = Math.max(dp(context, 8),
+                Math.min(location[0] + anchor.getWidth() / 2, dm.widthPixels - menuWidth - dp(context, 8)));
+        int menuY = Math.max(dp(context, 8), location[1] - dp(context, 10));
+        try {
+            popupWindow.showAtLocation(anchor, Gravity.NO_GRAVITY, menuX, menuY);
+            // Set the native guard only after the popup is actually on screen;
+            // if showAtLocation throws, _menuVisible would otherwise stay true
+            // forever and silently swallow every model tap (OnTap checks it).
+            Live2DNativeBridge.nativeSetMenuVisible(true);
+        } catch (Exception e) {
+            Log.w(TAG, "show: failed to display popup", e);
+            popupWindow = null;
+        }
+        Log.d(TAG, "show() popup displayed at (" + menuX + ", " + menuY + ") menuLayout childCount=" + menuLayout.getChildCount());
     }
 
     public void dismiss() {

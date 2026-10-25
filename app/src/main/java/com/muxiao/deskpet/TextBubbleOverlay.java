@@ -43,18 +43,27 @@ public class TextBubbleOverlay {
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.WRAP_CONTENT, false);
         bubbleWindow.setBackgroundDrawable(null);
-        bubbleWindow.setOutsideTouchable(true);
         bubbleWindow.setElevation(dp(context, 4));
 
         int[] location = new int[2];
         anchor.getLocationOnScreen(location);
 
-        int x = location[0] + anchor.getWidth() / 2;
-        int y = location[1] - dp(context, 60);
+        // Measure so the bubble can be centered above the anchor and clamped
+        // on screen (it used to open with its left edge at the anchor center,
+        // overflowing the screen when the pet was near the right/top edge).
+        textView.measure(View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+        android.util.DisplayMetrics dm = context.getResources().getDisplayMetrics();
+        int bubbleW = Math.min(textView.getMeasuredWidth(), dm.widthPixels);
+        int x = location[0] + anchor.getWidth() / 2 - bubbleW / 2;
+        int y = location[1] - textView.getMeasuredHeight() - dp(context, 8);
+        x = Math.max(dp(context, 4), Math.min(x, dm.widthPixels - bubbleW - dp(context, 4)));
+        y = Math.max(dp(context, 4), y);
 
         try {
             bubbleWindow.showAtLocation(anchor, Gravity.NO_GRAVITY, x, y);
         } catch (Exception e) {
+            bubbleWindow = null;
             return;
         }
 

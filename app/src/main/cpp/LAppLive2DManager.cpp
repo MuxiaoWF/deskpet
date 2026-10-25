@@ -1204,9 +1204,10 @@ void LAppLive2DManager::OnTap(csmFloat32 x, csmFloat32 y, bool wasDragging) {
         return;
     }
 
-    // up_mtn already fired in OnHitAreaEnded — skip param/switch dispatch
-    // but still allow motion playback (tap motion is separate from up_mtn).
-    bool skipParamDispatch = _upMtnFired;
+    // Note: up_mtn (press-release feedback) already played in OnHitAreaEnded.
+    // The param/switch dispatch below intentionally still runs — toggle hit
+    // areas must cycle their param on release even when an up_mtn is configured.
+    // (The old `skipParamDispatch = _upMtnFired` variable here was never read.)
 
     // If drag already triggered the hit area action (param toggle during drag),
     // don't return early — still allow motion playback for switch areas.
