@@ -51,6 +51,8 @@ import androidx.documentfile.provider.DocumentFile;
 import androidx.appcompat.app.AppCompatDelegate;
 import androidx.core.os.LocaleListCompat;
 
+// Instantiated by the Android framework from the manifest, not from app code.
+@SuppressWarnings("unused")
 public class MainActivity extends AppCompatActivity {
 
     // Color palette (updated dynamically for dark mode)
@@ -256,10 +258,10 @@ public class MainActivity extends AppCompatActivity {
                 checked -> {
                     boolean dragOn = prefs.getBoolean("drag_enable", true);
                     if (!checked && !dragOn) {
-                        showBothDisabledWarning(prefs, "long_press_menu_enable", false,
+                        showBothDisabledWarning(prefs, "long_press_menu_enable",
                                 (androidx.appcompat.widget.SwitchCompat) ((LinearLayout) longPressHolder[0]).getChildAt(1));
                     } else {
-                        prefs.edit().putBoolean("long_press_menu_enable", checked).commit();
+                        prefs.edit().putBoolean("long_press_menu_enable", checked).apply();
                     }
                 });
         longPressHolder[0] = longPressToggle;
@@ -268,10 +270,10 @@ public class MainActivity extends AppCompatActivity {
                 checked -> {
                     boolean menuOn = prefs.getBoolean("long_press_menu_enable", true);
                     if (!checked && !menuOn) {
-                        showBothDisabledWarning(prefs, "drag_enable", false,
+                        showBothDisabledWarning(prefs, "drag_enable",
                                 (androidx.appcompat.widget.SwitchCompat) ((LinearLayout) dragHolder[0]).getChildAt(1));
                     } else {
-                        prefs.edit().putBoolean("drag_enable", checked).commit();
+                        prefs.edit().putBoolean("drag_enable", checked).apply();
                     }
                 });
         dragHolder[0] = dragToggle;
@@ -638,10 +640,10 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showBothDisabledWarning(SharedPreferences prefs, String key,
-                                         boolean value, androidx.appcompat.widget.SwitchCompat toggle) {
+                                         androidx.appcompat.widget.SwitchCompat toggle) {
         FileUtils.showBothDisabledWarning(this, () -> {
-            toggle.setChecked(!value);
-            prefs.edit().putBoolean(key, !value).commit();
+            toggle.setChecked(true);
+            prefs.edit().putBoolean(key, true).apply();
         });
     }
 
@@ -1120,7 +1122,7 @@ public class MainActivity extends AppCompatActivity {
                     statusTvRef.setText(parsed);
                 });
             }
-            if (thumbRef != null && previewRef != null) {
+            if (thumbRef != null) {
                 try {
                     String cacheKey = previewRef.getAbsolutePath();
                     Bitmap bmp = thumbnailCache.get(cacheKey);
@@ -1356,7 +1358,7 @@ public class MainActivity extends AppCompatActivity {
         importKind = "folder";
         importCancelFlag.set(false);
         updateButtonStates();
-        showImportStatus(getString(R.string.import_status_scanning), true, 0, 0);
+        showImportStatus(getString(R.string.import_status_scanning));
 
         new Thread(() -> {
             ModelImporter importer = new ModelImporter(this);
@@ -1421,7 +1423,7 @@ public class MainActivity extends AppCompatActivity {
         importKind = "lpk";
         importCancelFlag.set(false);
         updateButtonStates();
-        showImportStatus(getString(R.string.import_status_reading), true, 0, 0);
+        showImportStatus(getString(R.string.import_status_reading));
 
         new Thread(() -> {
             LpkUnpacker.UnpackResult result = null;
@@ -1484,7 +1486,7 @@ public class MainActivity extends AppCompatActivity {
         isExporting = true;
         importKind = "export";
         updateButtonStates();
-        showImportStatus(getString(R.string.toast_exporting), true, 0, 0);
+        showImportStatus(getString(R.string.toast_exporting));
 
         new Thread(() -> {
             boolean success = false;
@@ -1558,12 +1560,12 @@ public class MainActivity extends AppCompatActivity {
     // --- Import status bar ---
 
     /** Show the bottom status bar with initial text; cancelable only for imports. */
-    private void showImportStatus(String text, boolean indeterminate, int done, int total) {
+    private void showImportStatus(String text) {
         importStatusText.setText(text);
         btnCancelImport.setVisibility("export".equals(importKind) ? View.GONE : View.VISIBLE);
         btnCancelImport.setEnabled(true);
         btnCancelImport.setText(R.string.dialog_cancel);
-        applyImportProgress(indeterminate, done, total);
+        applyImportProgress(true, 0, 0);
         importStatusBar.setVisibility(View.VISIBLE);
     }
 
@@ -1588,7 +1590,8 @@ public class MainActivity extends AppCompatActivity {
         if (stage == ImportProgressListener.STAGE_COPY) {
             importStatusText.setText(lpk
                     ? getString(R.string.import_status_percent, done)
-                    : getString(R.string.import_status_files, done, total));
+                    : getResources().getQuantityString(
+                            R.plurals.import_status_files, total, done, total));
         } else if (stage == ImportProgressListener.STAGE_SCAN) {
             importStatusText.setText(getString(R.string.import_status_scanning));
         } else {
@@ -1600,7 +1603,7 @@ public class MainActivity extends AppCompatActivity {
     private void applyImportProgress(boolean indeterminate, int done, int total) {
         importProgressBar.setIndeterminate(indeterminate);
         if (!indeterminate && total > 0) {
-            importProgressBar.setMax(Math.max(1, total));
+            importProgressBar.setMax(total);
             importProgressBar.setProgress(Math.max(0, Math.min(done, total)));
         }
     }
@@ -1644,8 +1647,10 @@ public class MainActivity extends AppCompatActivity {
         int slash = lastSeg.lastIndexOf('/');
         if (slash >= 0) lastSeg = lastSeg.substring(slash + 1);
         String lower = lastSeg.toLowerCase(Locale.ROOT);
-        if (lower.endsWith(".wpk")) lastSeg = lastSeg.substring(0, lastSeg.length() - 4);
-        else if (lower.endsWith(".lpk")) lastSeg = lastSeg.substring(0, lastSeg.length() - 4);
+        // Both extensions are 4 chars long, so strip the same suffix either way
+        if (lower.endsWith(".wpk") || lower.endsWith(".lpk")) {
+            lastSeg = lastSeg.substring(0, lastSeg.length() - 4);
+        }
         return lastSeg.isEmpty() ? null : lastSeg;
     }
 

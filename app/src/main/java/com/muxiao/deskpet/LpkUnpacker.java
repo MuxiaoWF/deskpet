@@ -64,19 +64,15 @@ public class LpkUnpacker {
         public final String hitAreaConfig;  // JSON array of hit area definitions
         public final String lookAtConfig;   // JSON object of look-at parameters
         public final String modelConfig;    // JSON object of model-level config (motions, expressions, etc.)
-        public final String previewPath;    // Path to extracted preview image
 
-        public UnpackResult(String modelPath, String hitAreaConfig, String lookAtConfig, String modelConfig, String previewPath) {
+        public UnpackResult(String modelPath, String hitAreaConfig, String lookAtConfig, String modelConfig) {
             this.modelPath = modelPath;
             this.hitAreaConfig = hitAreaConfig;
             this.lookAtConfig = lookAtConfig;
             this.modelConfig = modelConfig;
-            this.previewPath = previewPath;
         }
     }
 
-    /** Tracks the preview path extracted during unpack(). */
-    private String lastExtractedPreviewPath;
     /** Tracks the raw config.mlve JSON string for config extraction. */
     private String lastMlveRaw;
 
@@ -90,6 +86,7 @@ public class LpkUnpacker {
     }
 
     /** Record a failure reason and produce the null result callers expect. */
+    @SuppressWarnings("SameReturnValue")
     private String fail(String code) {
         lastError = code;
         return null;
@@ -114,17 +111,6 @@ public class LpkUnpacker {
     }
 
     /**
-     * Unpack an LPK/WPK file with an optional custom model name.
-     *
-     * @param lpkUri     URI of the .lpk or .wpk file
-     * @param customName custom name for the model directory, or null to auto-detect
-     * @return absolute path to the extracted .model.json or .model3.json, or null on failure
-     */
-    public String unpack(Uri lpkUri, String customName) {
-        return unpack(lpkUri, customName, null, null);
-    }
-
-    /**
      * Unpack an LPK/WPK file with cancel and progress support.
      *
      * @param cancelFlag when set to true, aborts the unpack and cleans up (nullable)
@@ -132,7 +118,6 @@ public class LpkUnpacker {
      */
     public String unpack(Uri lpkUri, String customName,
                          AtomicBoolean cancelFlag, ImportProgressListener progress) {
-        lastExtractedPreviewPath = null;
         lastMlveRaw = null;
         lastError = null;
         createdDirs.clear();
@@ -141,7 +126,7 @@ public class LpkUnpacker {
         File tempLpk = null;
         try {
             tempLpk = new File(context.getCacheDir(), "temp_lpk_" + System.currentTimeMillis() + ".lpk");
-            copyUriToFile(lpkUri, tempLpk, progress);
+            copyUriToFile(lpkUri, tempLpk);
             Log.i(TAG, "LPK file copied to: " + tempLpk.getAbsolutePath() + " size=" + tempLpk.length());
             if (tempLpk.length() == 0) {
                 return fail(ERR_NOT_ZIP);
@@ -162,10 +147,11 @@ public class LpkUnpacker {
             Log.e(TAG, "Failed to unpack LPK", e);
             return fail(ERR_IO);
         } finally {
-            if (tempLpk != null) tempLpk.delete();
+            if (tempLpk != null && !tempLpk.delete()) {
+                tempLpk.deleteOnExit();
+            }
             if (lastError != null) {
                 cleanupCreatedDirs();
-                lastExtractedPreviewPath = null;
             }
         }
     }
@@ -222,9 +208,12 @@ public class LpkUnpacker {
             String modelName = (customName != null && !customName.isEmpty())
                     ? customName : "lpk_model_" + System.currentTimeMillis();
             File outDir = new File(context.getFilesDir(), "models/" + sanitizeForDirName(modelName));
-            outDir.mkdirs();
+            if (!outDir.exists() && !outDir.mkdirs()) {
+                Log.e(TAG, "Failed to create output directory: " + outDir);
+                return fail(ERR_IO);
+            }
             createdDirs.add(outDir);
-            modelJsonPath = extractFlat(zip, lpkType, keyId, null, null, encrypted, outDir);
+            modelJsonPath = extractFlat(zip, lpkType, keyId, encrypted, outDir);
         }
 
         if (modelJsonPath != null) {
@@ -243,7 +232,6 @@ public class LpkUnpacker {
             if (modelDir != null) {
                 File previewFile = new File(modelDir, "preview.png");
                 FileUtils.writeFile(previewFile, outerPreview);
-                lastExtractedPreviewPath = previewFile.getAbsolutePath();
                 Log.i(TAG, "Saved preview: " + previewFile.getAbsolutePath());
             }
         }
@@ -255,13 +243,6 @@ public class LpkUnpacker {
             if (lastError == null) lastError = ERR_UNPACK;
         }
         return modelJsonPath;
-    }
-
-    /**
-     * Unpack an LPK/WPK file and return full config data.
-     */
-    public UnpackResult unpackWithConfig(Uri lpkUri, String customName) {
-        return unpackWithConfig(lpkUri, customName, null, null);
     }
 
     /**
@@ -331,23 +312,12 @@ public class LpkUnpacker {
             }
         }
 
-        // Step 4: Preview was already extracted during unpack()
-        String previewPath = lastExtractedPreviewPath;
-        if (previewPath == null) {
-            // Fallback: check if preview exists in model directory
-            if (modelDir != null) {
-                File previewFile = new File(modelDir, "preview.png");
-                if (previewFile.exists()) previewPath = previewFile.getAbsolutePath();
-            }
-        }
-
         Log.i(TAG, "unpackWithConfig result - modelPath: " + modelPath
                 + " hitAreas: " + (hitAreaConfig != null ? "yes" : "no")
                 + " lookAt: " + (lookAtConfig != null ? "yes" : "no")
-                + " modelConfig: " + (modelConfig != null ? "yes" : "no")
-                + " preview: " + (previewPath != null ? "yes" : "no"));
+                + " modelConfig: " + (modelConfig != null ? "yes" : "no"));
 
-        return new UnpackResult(modelPath, hitAreaConfig, lookAtConfig, modelConfig, previewPath);
+        return new UnpackResult(modelPath, hitAreaConfig, lookAtConfig, modelConfig);
     }
 
     /**
@@ -746,7 +716,7 @@ public class LpkUnpacker {
             String mlveRaw = readMlveConfig(nestedZip);
             if (mlveRaw == null) {
                 Log.e(TAG, "Failed to find config.mlve in nested LPK");
-                nestedLpkFile.delete();
+                if (!nestedLpkFile.delete()) nestedLpkFile.deleteOnExit();
                 return fail(ERR_NO_CONFIG);
             }
 
@@ -780,9 +750,13 @@ public class LpkUnpacker {
                 String modelName = (resolvedName != null && !resolvedName.isEmpty())
                         ? resolvedName : "lpk_model_" + System.currentTimeMillis();
                 File outDir = new File(context.getFilesDir(), "models/" + sanitizeForDirName(modelName));
-                outDir.mkdirs();
+                if (!outDir.exists() && !outDir.mkdirs()) {
+                    Log.e(TAG, "Failed to create output directory: " + outDir);
+                    if (!nestedLpkFile.delete()) nestedLpkFile.deleteOnExit();
+                    return fail(ERR_IO);
+                }
                 createdDirs.add(outDir);
-                modelJsonPath = extractFlat(nestedZip, lpkType, keyId, null, null, encrypted, outDir);
+                modelJsonPath = extractFlat(nestedZip, lpkType, keyId, encrypted, outDir);
             }
 
             // Save preview: prefer outer WPK preview, fall back to inner LPK preview
@@ -792,23 +766,18 @@ public class LpkUnpacker {
                     File previewFile = new File(modelDir, "preview.png");
                     if (outerPreview != null) {
                         FileUtils.writeFile(previewFile, outerPreview);
-                        lastExtractedPreviewPath = previewFile.getAbsolutePath();
                         Log.i(TAG, "Saved outer WPK preview: " + previewFile.getAbsolutePath());
-                    } else if (previewFile.exists()) {
-                        lastExtractedPreviewPath = previewFile.getAbsolutePath();
-                        Log.i(TAG, "Using existing inner LPK preview: " + previewFile.getAbsolutePath());
-                    } else {
+                    } else if (!previewFile.exists()) {
                         byte[] innerPreview = findPreviewInZip(nestedZip);
                         if (innerPreview != null) {
                             FileUtils.writeFile(previewFile, innerPreview);
-                            lastExtractedPreviewPath = previewFile.getAbsolutePath();
                             Log.i(TAG, "Saved inner LPK preview: " + previewFile.getAbsolutePath());
                         }
                     }
                 }
             }
         }
-        nestedLpkFile.delete();
+        if (!nestedLpkFile.delete()) nestedLpkFile.deleteOnExit();
 
         if (modelJsonPath != null) {
             Log.i(TAG, "Nested LPK extracted to: " + modelJsonPath);
@@ -828,7 +797,10 @@ public class LpkUnpacker {
         String modelName = (customName != null && !customName.isEmpty())
                 ? customName : "lpk_model_" + System.currentTimeMillis();
         File outDir = new File(context.getFilesDir(), "models/" + sanitizeForDirName(modelName));
-        outDir.mkdirs();
+        if (!outDir.exists() && !outDir.mkdirs()) {
+            Log.e(TAG, "Failed to create output directory: " + outDir);
+            return fail(ERR_IO);
+        }
         createdDirs.add(outDir);
 
         JSONArray list = mlve.optJSONArray("list");
@@ -926,7 +898,6 @@ public class LpkUnpacker {
 
 
             File outFile = new File(outDir, outName);
-            Objects.requireNonNull(outFile.getParentFile()).mkdirs();
             FileUtils.writeFile(outFile, content);
             nameMapping.put(basename, outName);
             skippedCount++;
@@ -992,10 +963,10 @@ public class LpkUnpacker {
 
     /**
      * Extract STD_1_0 or unknown format — flat file extraction.
+     * fileId/metaData are not needed here: flat packages never use STM_1_0 keying.
      */
     private String extractFlat(ZipFile zip, String lpkType, String keyId,
-                                String fileId, String metaData, boolean encrypted,
-                                File outDir) throws Exception {
+                                boolean encrypted, File outDir) throws Exception {
         String modelJsonPath = null;
 
         Log.i(TAG, "Extracting flat format, encrypted=" + encrypted);
@@ -1016,7 +987,6 @@ public class LpkUnpacker {
             String ext = getExtension(name);
 
             File outFile = new File(outDir, sanitizeFileName(name));
-            Objects.requireNonNull(outFile.getParentFile()).mkdirs();
 
             if (!encrypted || ext.equals(".json") || ext.equals(".mlve") || ext.equals(".txt")) {
                 // Extract as-is
@@ -1026,7 +996,7 @@ public class LpkUnpacker {
                 }
             } else {
                 byte[] data = readEntry(zip, entry);
-                byte[] decrypted = decryptData(lpkType, keyId, fileId, metaData, name, data);
+                byte[] decrypted = decryptData(lpkType, keyId, null, null, name, data);
 
                 if (!verifyDecryptedData(decrypted, name)) {
                     Log.w(TAG, "Decryption may have failed for: " + name);
@@ -1818,7 +1788,7 @@ public class LpkUnpacker {
         }
     }
 
-    private void copyUriToFile(Uri uri, File dest, ImportProgressListener progress) throws Exception {
+    private void copyUriToFile(Uri uri, File dest) throws Exception {
         Long total = queryDocumentSize(uri);
         try (InputStream is = context.getContentResolver().openInputStream(uri);
              FileOutputStream fos = new FileOutputStream(dest)) {
@@ -1867,16 +1837,13 @@ public class LpkUnpacker {
      */
     public static UnpackResult loadPersistedConfigs(String modelPath) {
         File modelDir = new File(modelPath).getParentFile();
-        if (modelDir == null) return new UnpackResult(modelPath, null, null, null, null);
+        if (modelDir == null) return new UnpackResult(modelPath, null, null, null);
 
         String hitAreaConfig = FileUtils.readFileAsString(new File(modelDir, "hit_area_config.json"));
         String lookAtConfig = FileUtils.readFileAsString(new File(modelDir, "look_at_config.json"));
         String modelConfig = FileUtils.readFileAsString(new File(modelDir, "model_config.json"));
-        String previewPath = null;
-        File previewFile = new File(modelDir, "preview.png");
-        if (previewFile.exists()) previewPath = previewFile.getAbsolutePath();
 
-        return new UnpackResult(modelPath, hitAreaConfig, lookAtConfig, modelConfig, previewPath);
+        return new UnpackResult(modelPath, hitAreaConfig, lookAtConfig, modelConfig);
     }
 
 }

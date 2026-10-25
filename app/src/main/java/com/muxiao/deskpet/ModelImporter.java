@@ -16,7 +16,6 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -46,10 +45,6 @@ public class ModelImporter {
     /** Reason of the last failure, or null if the last import succeeded. */
     public String getLastError() {
         return lastError;
-    }
-
-    public String importModel(Uri treeUri, String customName) {
-        return importModel(treeUri, customName, null, null);
     }
 
     /**
@@ -87,7 +82,11 @@ public class ModelImporter {
             // Determine directory name: custom > derived from model JSON filename
             String modelName = resolveModelName(customName, modelJsonName);
             modelDir = createUniqueModelDir(modelName);
-            modelDir.mkdirs();
+            if (!modelDir.mkdirs()) {
+                Log.e(TAG, "Failed to create model directory: " + modelDir);
+                lastError = ERR_IO;
+                return null;
+            }
 
             // Copy all files preserving directory structure
             int copied = 0;
@@ -100,7 +99,10 @@ public class ModelImporter {
                 if (relativePath == null || relativePath.isEmpty()) continue;
 
                 File destFile = new File(modelDir, relativePath);
-                Objects.requireNonNull(destFile.getParentFile()).mkdirs();
+                File parentDir = destFile.getParentFile();
+                if (parentDir != null && !parentDir.isDirectory() && !parentDir.mkdirs()) {
+                    Log.w(TAG, "Failed to create directory: " + parentDir);
+                }
 
                 try (InputStream is = context.getContentResolver().openInputStream(f.uri)) {
                     if (is != null) {
@@ -266,11 +268,11 @@ public class ModelImporter {
                 String mimeType = cursor.getString(2);
                 Uri docUri = DocumentsContract.buildDocumentUriUsingTree(dirUri, childDocId);
 
+                String childPath = prefix.isEmpty() ? name : prefix + "/" + name;
                 if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mimeType)) {
-                    listFilesRecursive(docUri, prefix.isEmpty() ? name : prefix + "/" + name, result);
+                    listFilesRecursive(docUri, childPath, result);
                 } else {
-                    String relPath = prefix.isEmpty() ? name : prefix + "/" + name;
-                    result.add(new UriFile(docUri, name, relPath));
+                    result.add(new UriFile(docUri, name, childPath));
                 }
             }
         } catch (Exception e) {

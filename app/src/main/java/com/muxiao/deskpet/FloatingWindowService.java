@@ -9,14 +9,12 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.os.Build;
-import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.view.Display;
@@ -24,16 +22,11 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
-import android.widget.FrameLayout;
-import android.widget.ProgressBar;
-import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.core.app.NotificationCompat;
 import com.muxiao.deskpet.live2d.Live2DGLSurfaceView;
 import com.muxiao.deskpet.live2d.Live2DNativeBridge;
-
-import org.json.JSONObject;
 
 import java.io.File;
 
@@ -42,6 +35,8 @@ import java.io.File;
  * Handles touch events (drag, tap, long-press), pinch-to-scale, click-through mode,
  * and model loading via JNI to native Live2D code.
  */
+// Instantiated by the Android framework from the manifest, not from app code.
+@SuppressWarnings("unused")
 public class FloatingWindowService extends Service {
 
     public interface LoadingStateListener {
@@ -129,7 +124,6 @@ public class FloatingWindowService extends Service {
 
     // Shake gesture detection
     private SensorManager sensorManager;
-    private Sensor accelerometer;
     private long lastShakeTime = 0;
     private static final float SHAKE_THRESHOLD = 20.0f;  // raised from 15 to reduce false positives from tilting
     private static final long SHAKE_COOLDOWN_MS = 1000;
@@ -185,10 +179,6 @@ public class FloatingWindowService extends Service {
                 }
             };
 
-    public static void start(Context context, String modelPath) {
-        start(context, modelPath, null, null, null);
-    }
-
     public static void start(Context context, String modelPath,
                               String hitAreaConfig, String lookAtConfig, String modelConfig) {
         Intent intent = new Intent(context, FloatingWindowService.class);
@@ -236,8 +226,7 @@ public class FloatingWindowService extends Service {
         });
 
         // Sound is now triggered from native side (works for menu, hit area, and auto motions)
-        Live2DNativeBridge.setMotionSoundCallback((soundPath, delayMs) ->
-                motionSoundPlayer.play(soundPath, delayMs));
+        Live2DNativeBridge.setMotionSoundCallback(motionSoundPlayer::play);
 
         // Model load result: surface native load failures to the user instead
         // of leaving a blank transparent window with no explanation.
@@ -257,17 +246,12 @@ public class FloatingWindowService extends Service {
         final android.os.Handler refreshHandler = new android.os.Handler(android.os.Looper.getMainLooper());
         final Runnable[] refreshRunnable = {null};
         Live2DNativeBridge.setVarFloatChangedCallback((name, value) -> {
-            if (actionMenuManager != null) {
-                if (refreshRunnable[0] != null) {
-                    refreshHandler.removeCallbacks(refreshRunnable[0]);
-                }
-                refreshRunnable[0] = () -> {
-                    if (actionMenuManager != null) {
-                        actionMenuManager.refresh();
-                    }
-                };
-                refreshHandler.postDelayed(refreshRunnable[0], 100);
+            android.util.Log.d("DeskPet", "[Service]VarFloat changed: " + name + "=" + value);
+            if (refreshRunnable[0] != null) {
+                refreshHandler.removeCallbacks(refreshRunnable[0]);
             }
+            refreshRunnable[0] = actionMenuManager::refresh;
+            refreshHandler.postDelayed(refreshRunnable[0], 100);
         });
 
         prefs.registerOnSharedPreferenceChangeListener(prefsListener);
@@ -275,7 +259,7 @@ public class FloatingWindowService extends Service {
         // Initialize shake detection via accelerometer
         sensorManager = (SensorManager) getSystemService(SENSOR_SERVICE);
         if (sensorManager != null) {
-            accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+            Sensor accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
             if (accelerometer != null) {
                 firstAccelReading = true;  // reset to avoid stale delta on re-registration
                 sensorManager.registerListener(sensorListener, accelerometer, SensorManager.SENSOR_DELAY_NORMAL);
@@ -458,6 +442,9 @@ public class FloatingWindowService extends Service {
         }
     }
 
+    // Tap handling runs entirely in onTouch (MotionEvent dispatch to native),
+    // so there is no meaningful performClick for accessibility to call.
+    @SuppressLint("ClickableViewAccessibility")
     @Override
     public void onDestroy() {
         serviceRunning = false;
@@ -517,9 +504,16 @@ public class FloatingWindowService extends Service {
                     latch.countDown();
                 }
             });
+            boolean nativeReleased = false;
             try {
-                latch.await(5000, java.util.concurrent.TimeUnit.MILLISECONDS);
-            } catch (InterruptedException ignored) {}
+                nativeReleased = latch.await(5000, java.util.concurrent.TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            if (!nativeReleased) {
+                android.util.Log.w("DeskPet",
+                        "nativeRelease did not finish within 5s, continuing teardown");
+            }
             // Pause GL rendering before removing from window to prevent
             // SurfaceView.performDrawFinished NPE on pending frames
             glSurfaceView.onPause();
@@ -698,8 +692,7 @@ public class FloatingWindowService extends Service {
                 cancelLongPress();
                 cancelPendingTap();
                 cancelPeekHide();
-                glSurfaceView.queueEvent(() ->
-                        Live2DNativeBridge.nativeOnTouchesCancelled());
+                glSurfaceView.queueEvent(Live2DNativeBridge::nativeOnTouchesCancelled);
                 return true;
 
             case MotionEvent.ACTION_UP:
@@ -714,11 +707,9 @@ public class FloatingWindowService extends Service {
                 // Skip tap/long-press/double-tap if a pinch just occurred
                 if (wasPinching) {
                     wasPinching = false;
-                    glSurfaceView.queueEvent(() ->
-                            Live2DNativeBridge.nativeOnTouchesCancelled());
+                    glSurfaceView.queueEvent(Live2DNativeBridge::nativeOnTouchesCancelled);
                     return true;
                 }
-                wasPinching = false;
                 if (!isDragging) {
                     v.performClick();
                     if (longPressConsumed) {

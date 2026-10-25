@@ -91,11 +91,12 @@ public class EdgeHideManager {
             // Not near any edge — find the closest one via center distance
             int cx = params.x + w / 2;
             int cy = params.y + h / 2;
-            int dL = cx, dR = screenWidth - cx, dT = cy, dB = screenHeight - cy;
-            int min = Math.min(Math.min(dL, dR), Math.min(dT, dB));
-            if (min == dL) currentEdge = Edge.LEFT;
+            int dR = screenWidth - cx;
+            int dB = screenHeight - cy;
+            int min = Math.min(Math.min(cx, dR), Math.min(cy, dB));
+            if (min == cx) currentEdge = Edge.LEFT;
             else if (min == dR) currentEdge = Edge.RIGHT;
-            else if (min == dT) currentEdge = Edge.TOP;
+            else if (min == cy) currentEdge = Edge.TOP;
             else currentEdge = Edge.BOTTOM;
         }
 

@@ -5,7 +5,6 @@
     <string name="title_live2d_pet">Live2D 桌寵</string>
     <string name="section_control">控制</string>
     <string name="section_import">匯入模型</string>
-    <string name="section_size">大小調節</string>
     <string name="section_models">已匯入的模型</string>
     <string name="section_birthday">生日</string>
 
@@ -21,10 +20,7 @@
     <string name="hint_empty_models">尚無模型，點擊上方按鈕匯入</string>
 
     <string name="toast_overlay_permission">需要懸浮視窗權限</string>
-    <string name="toast_pet_started">桌寵已啟動</string>
     <string name="toast_pet_started_loading">桌寵已啟動，正在載入上次的模型…</string>
-    <string name="toast_importing">正在匯入模型…</string>
-    <string name="toast_unpacking">正在解壓縮 LPK…</string>
     <string name="toast_import_success">模型匯入成功</string>
     <string name="toast_lpk_success">LPK 匯入成功</string>
     <string name="toast_import_failed">模型匯入失敗</string>
@@ -70,7 +66,9 @@
     <string name="import_status_reading">正在讀取檔案…</string>
     <string name="import_status_percent">正在讀取檔案… %1$d%%</string>
     <string name="import_status_unpacking">正在解壓縮…</string>
-    <string name="import_status_files">正在匯入… %1$d/%2$d 個檔案</string>
+    <plurals name="import_status_files">
+        <item quantity="other">正在匯入… %1$d/%2$d 個檔案</item>
+    </plurals>
     <string name="toast_crash_restart_no_model">模型載入異常，請重新選擇模型</string>
     <string name="toast_model_load_failed">模型載入失敗，請嘗試重新匯入或選擇其他模型</string>
     <string name="notif_load_failed">模型載入失敗</string>
@@ -129,7 +127,6 @@
     <string name="toast_exporting">正在匯出…</string>
     <string name="toast_export_success">匯出成功</string>
     <string name="toast_export_failed">匯出失敗</string>
-    <string name="btn_exporting">匯出中…</string>
 
     <!-- Model card buttons -->
     <string name="btn_export">匯出</string>

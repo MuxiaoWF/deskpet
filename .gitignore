@@ -40,3 +40,6 @@ il2cpp_temp/
 
 # analyse files
 doc/
+
+# results
+results/

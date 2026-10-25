@@ -5,7 +5,6 @@
     <string name="title_live2d_pet">Live2D DeskPet</string>
     <string name="section_control">Controls</string>
     <string name="section_import">Import Model</string>
-    <string name="section_size">Size</string>
     <string name="section_models">Imported Models</string>
     <string name="section_birthday">Birthday</string>
 
@@ -21,10 +20,7 @@
     <string name="hint_empty_models">No models yet — tap Import above to get started</string>
 
     <string name="toast_overlay_permission">Overlay permission is required</string>
-    <string name="toast_pet_started">Pet started</string>
     <string name="toast_pet_started_loading">Pet started (loading previous model…)</string>
-    <string name="toast_importing">Importing model…</string>
-    <string name="toast_unpacking">Extracting LPK…</string>
     <string name="toast_import_success">Model imported successfully</string>
     <string name="toast_lpk_success">LPK imported successfully</string>
     <string name="toast_import_failed">Failed to import model</string>
@@ -70,7 +66,10 @@
     <string name="import_status_reading">Reading file…</string>
     <string name="import_status_percent">Reading file… %1$d%%</string>
     <string name="import_status_unpacking">Unpacking…</string>
-    <string name="import_status_files">Importing… %1$d/%2$d files</string>
+    <plurals name="import_status_files">
+        <item quantity="one">Importing… %1$d/%2$d file</item>
+        <item quantity="other">Importing… %1$d/%2$d files</item>
+    </plurals>
     <string name="toast_crash_restart_no_model">Model failed to load. Please select a model again.</string>
     <string name="toast_model_load_failed">Model failed to load. Try re-importing it or selecting another model.</string>
     <string name="notif_load_failed">Model failed to load</string>
@@ -129,7 +128,6 @@
     <string name="toast_exporting">Exporting…</string>
     <string name="toast_export_success">Exported successfully</string>
     <string name="toast_export_failed">Export failed</string>
-    <string name="btn_exporting">Exporting…</string>
 
     <!-- Model card buttons -->
     <string name="btn_export">Export</string>

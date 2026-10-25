@@ -96,6 +96,7 @@ public class Live2DNativeBridge {
     /**
      * Called from native code when a motion with a text field is triggered.
      */
+    @SuppressWarnings("unused") // JNI callback
     public static void onMotionText(String text, int durationMs, int delayMs) {
         if (motionTextCallback != null) {
             motionTextCallback.onMotionText(text, durationMs, delayMs);
@@ -103,6 +104,9 @@ public class Live2DNativeBridge {
     }
 
     public interface MotionSoundCallback {
+        // Params are forwarded via a method reference in FloatingWindowService
+        // (motionSoundPlayer::play); the signature is fixed by the JNI caller.
+        @SuppressWarnings("unused")
         void onMotionSound(String soundPath, int delayMs);
     }
 
@@ -115,6 +119,7 @@ public class Live2DNativeBridge {
     /**
      * Called from native code when a motion with a sound field is triggered.
      */
+    @SuppressWarnings("unused") // JNI callback
     public static void onMotionSound(String soundPath, int delayMs) {
         if (motionSoundCallback != null) {
             motionSoundCallback.onMotionSound(soundPath, delayMs);
@@ -136,6 +141,7 @@ public class Live2DNativeBridge {
      * @param costumeName The costume set name (empty for single group toggle)
      * @param groupName The group target that was toggled (empty for set-level changes)
      */
+    @SuppressWarnings("unused") // JNI callback
     public static void onCostumeChanged(String costumeName, String groupName) {
         if (costumeChangedCallback != null) {
             costumeChangedCallback.onCostumeChanged(costumeName, groupName);
@@ -155,6 +161,7 @@ public class Live2DNativeBridge {
     /**
      * Called from native code when a VarFloat value changes (for menu sync).
      */
+    @SuppressWarnings("unused") // JNI callback
     public static void onVarFloatChanged(String name, float value) {
         if (varFloatChangedCallback != null) {
             varFloatChangedCallback.onVarFloatChanged(name, value);
@@ -175,6 +182,7 @@ public class Live2DNativeBridge {
      * Called from native code after a model load attempt.
      * Without this, a corrupt model leaves a blank window with no feedback.
      */
+    @SuppressWarnings("unused") // JNI callback
     public static void onModelLoadResult(boolean success, String modelPath) {
         ModelLoadCallback cb = modelLoadCallback;
         if (cb != null) {
@@ -198,9 +206,9 @@ public class Live2DNativeBridge {
      * The Shaders/ fallback handles GLSL source files that the native renderer
      * requests by bare filename but are stored under assets/Shaders/.
      */
+    @SuppressWarnings("unused") // JNI callback
     public static byte[] LoadFile(String filePath) {
         InputStream fileData = null;
-        String source = "none";
         try {
             boolean isAbsolute = filePath.startsWith("/");
 
@@ -209,7 +217,6 @@ public class Live2DNativeBridge {
                 File file = new File(filePath);
                 if (file.exists()) {
                     fileData = new FileInputStream(file);
-                    source = "filesystem";
                 }
             }
 
@@ -217,7 +224,6 @@ public class Live2DNativeBridge {
             if (fileData == null && context != null) {
                 try {
                     fileData = context.getAssets().open(filePath);
-                    source = "assets";
                 } catch (IOException ignored) {
                 }
 
@@ -225,7 +231,6 @@ public class Live2DNativeBridge {
                 if (fileData == null) {
                     try {
                         fileData = context.getAssets().open("Shaders/" + filePath);
-                        source = "assets/Shaders/";
                     } catch (IOException ignored) {
                     }
                 }
@@ -236,7 +241,6 @@ public class Live2DNativeBridge {
                 File file = new File(filePath);
                 if (file.exists()) {
                     fileData = new FileInputStream(file);
-                    source = "filesystem";
                 } else {
                     Log.w(TAG, "LoadFile: file not found: " + filePath);
                     return null;
@@ -249,8 +253,7 @@ public class Live2DNativeBridge {
             while ((len = fileData.read(buf)) != -1) {
                 bos.write(buf, 0, len);
             }
-            byte[] result = bos.toByteArray();
-            return result;
+            return bos.toByteArray();
         } catch (IOException e) {
             Log.e(TAG, "LoadFile IOException: " + filePath, e);
             return null;

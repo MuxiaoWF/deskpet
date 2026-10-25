@@ -5,7 +5,6 @@
     <string name="title_live2d_pet">Live2D 桌宠</string>
     <string name="section_control">控制</string>
     <string name="section_import">导入模型</string>
-    <string name="section_size">大小调节</string>
     <string name="section_models">已导入的模型</string>
     <string name="section_birthday">生日</string>
 
@@ -21,10 +20,7 @@
     <string name="hint_empty_models">暂无模型，点击上方按钮导入</string>
 
     <string name="toast_overlay_permission">需要悬浮窗权限</string>
-    <string name="toast_pet_started">桌宠已启动</string>
     <string name="toast_pet_started_loading">桌宠已启动，正在加载上次的模型…</string>
-    <string name="toast_importing">正在导入模型…</string>
-    <string name="toast_unpacking">正在解包 LPK…</string>
     <string name="toast_import_success">模型导入成功</string>
     <string name="toast_lpk_success">LPK 导入成功</string>
     <string name="toast_import_failed">模型导入失败</string>
@@ -70,7 +66,9 @@
     <string name="import_status_reading">正在读取文件…</string>
     <string name="import_status_percent">正在读取文件… %1$d%%</string>
     <string name="import_status_unpacking">正在解包…</string>
-    <string name="import_status_files">正在导入… %1$d/%2$d 个文件</string>
+    <plurals name="import_status_files">
+        <item quantity="other">正在导入… %1$d/%2$d 个文件</item>
+    </plurals>
     <string name="toast_crash_restart_no_model">模型加载异常，请重新选择模型</string>
     <string name="toast_model_load_failed">模型加载失败，请尝试重新导入或选择其他模型</string>
     <string name="notif_load_failed">模型加载失败</string>
@@ -129,7 +127,6 @@
     <string name="toast_exporting">正在导出…</string>
     <string name="toast_export_success">导出成功</string>
     <string name="toast_export_failed">导出失败</string>
-    <string name="btn_exporting">导出中…</string>
 
     <!-- Model card buttons -->
     <string name="btn_export">导出</string>

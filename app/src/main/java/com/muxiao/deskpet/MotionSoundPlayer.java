@@ -33,15 +33,6 @@ public class MotionSoundPlayer {
     }
 
     /**
-     * Play a sound file relative to the model directory.
-     *
-     * @param soundPath path relative to model dir
-     */
-    public void play(String soundPath) {
-        play(soundPath, 0);
-    }
-
-    /**
      * Play a sound file relative to the model directory, with optional delay.
      * Safe to call from any thread (e.g. GL thread via JNI callback).
      *
@@ -68,8 +59,8 @@ public class MotionSoundPlayer {
                 currentPlayer = new MediaPlayer();
                 currentPlayer.setAudioAttributes(AUDIO_ATTRIBUTES);
                 currentPlayer.setDataSource(soundFile.getAbsolutePath());
-                currentPlayer.setOnPreparedListener(mp -> mp.start());
-                currentPlayer.setOnCompletionListener(mp -> mp.release());
+                currentPlayer.setOnPreparedListener(MediaPlayer::start);
+                currentPlayer.setOnCompletionListener(MediaPlayer::release);
                 currentPlayer.setOnErrorListener((mp, what, extra) -> {
                     Log.w(TAG, "MediaPlayer error: what=" + what + " extra=" + extra);
                     mp.release();

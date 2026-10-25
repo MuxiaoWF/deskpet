@@ -139,12 +139,12 @@
 
 ### 新增方法
 
-| 方法 | 返回值 | 用途 |
-|------|--------|------|
-| `GetPartOpacityTargets()` | `vector<CubismIdHandle>` | 运动中 PartOpacity 曲线的 Part ID 列表 |
-| `GetParameterTargets()` | `vector<CubismIdHandle>` | 运动中 Parameter 曲线的参数 ID 列表 |
-| `GetParameterFinalValues()` | `vector<pair<Id, float>>` | 所有参数曲线的最终帧值 |
-| `GetParameterChangedValues()` | `vector<pair<Id, float>>` | 仅返回首尾值不同的参数曲线 |
+| 方法                          | 返回值                    | 用途                                   |
+|-------------------------------|---------------------------|----------------------------------------|
+| `GetPartOpacityTargets()`     | `vector<CubismIdHandle>`  | 运动中 PartOpacity 曲线的 Part ID 列表 |
+| `GetParameterTargets()`       | `vector<CubismIdHandle>`  | 运动中 Parameter 曲线的参数 ID 列表    |
+| `GetParameterFinalValues()`   | `vector<pair<Id, float>>` | 所有参数曲线的最终帧值                 |
+| `GetParameterChangedValues()` | `vector<pair<Id, float>>` | 仅返回首尾值不同的参数曲线             |
 
 ### CubismMotion.hpp
 

@@ -8,6 +8,7 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.opengl.GLSurfaceView;
+import android.os.Build;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.Gravity;
@@ -17,6 +18,8 @@ import android.widget.PopupWindow;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
+
+import androidx.appcompat.widget.SwitchCompat;
 
 import com.muxiao.deskpet.live2d.Live2DNativeBridge;
 
@@ -101,10 +104,24 @@ public class ActionMenuManager {
         }
         try {
             android.app.AlertDialog dialog = builder.create();
-            dialog.getWindow().setType(android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY);
+            android.view.Window window = dialog.getWindow();
+            if (window != null) {
+                window.setType(overlayWindowType());
+            }
             dialog.show();
         } catch (Exception ignored) {
         }
+    }
+
+    /**
+     * Overlay window type for service-context windows: TYPE_APPLICATION_OVERLAY
+     * only exists on API 26+, older platforms still use TYPE_PHONE.
+     */
+    @SuppressWarnings("deprecation")
+    private static int overlayWindowType() {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                ? android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                : android.view.WindowManager.LayoutParams.TYPE_PHONE;
     }
 
     public void show(Context context, View anchor, String modelDir) {
@@ -142,7 +159,7 @@ public class ActionMenuManager {
                 Log.d(TAG, "[Toggle:long_press_menu] enabled=" + enabled + " drag_enable=" + prefs.getBoolean("drag_enable", true));
                 if (!enabled && !prefs.getBoolean("drag_enable", true)) {
                     Log.w(TAG, "[Toggle:long_press_menu] Both would be disabled, showing warning");
-                    showBothDisabledWarning(context, prefs, "long_press_menu_enable", false, lpSwitch);
+                    showBothDisabledWarning(context, prefs, "long_press_menu_enable", lpSwitch);
                 } else {
                     boolean ok = prefs.edit().putBoolean("long_press_menu_enable", enabled).commit();
                     Log.d(TAG, "[Toggle:long_press_menu] commit result=" + ok);
@@ -237,7 +254,7 @@ public class ActionMenuManager {
                 Log.d(TAG, "[Toggle:drag_enable] enabled=" + enabled + " long_press_menu_enable=" + prefs.getBoolean("long_press_menu_enable", true));
                 if (!enabled && !prefs.getBoolean("long_press_menu_enable", true)) {
                     Log.w(TAG, "[Toggle:drag_enable] Both would be disabled, showing warning");
-                    showBothDisabledWarning(context, prefs, "drag_enable", false, dragSwitch);
+                    showBothDisabledWarning(context, prefs, "drag_enable", dragSwitch);
                 } else {
                     boolean ok = prefs.edit().putBoolean("drag_enable", enabled).commit();
                     Log.d(TAG, "[Toggle:drag_enable] commit result=" + ok);
@@ -332,10 +349,12 @@ public class ActionMenuManager {
             LinkedHashMap<String, List<Map.Entry<String, List<MenuItem>>>> categories = new LinkedHashMap<>();
             for (Map.Entry<String, List<MenuItem>> entry : menuData.motionGroups.entrySet()) {
                 String cat = getCategoryPrefix(entry.getKey());
-                if (!categories.containsKey(cat)) {
-                    categories.put(cat, new ArrayList<>());
+                List<Map.Entry<String, List<MenuItem>>> bucket = categories.get(cat);
+                if (bucket == null) {
+                    bucket = new ArrayList<>();
+                    categories.put(cat, bucket);
                 }
-                categories.get(cat).add(entry);
+                bucket.add(entry);
             }
 
             for (Map.Entry<String, List<Map.Entry<String, List<MenuItem>>>> catEntry : categories.entrySet()) {
@@ -393,7 +412,7 @@ public class ActionMenuManager {
                 maxHeight, true);
         popupWindow.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         popupWindow.setOutsideTouchable(true);
-        popupWindow.setWindowLayoutType(android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY);
+        popupWindow.setWindowLayoutType(overlayWindowType());
         popupWindow.setOnDismissListener(() -> {
             Log.d(TAG, "PopupWindow dismissed");
             popupWindow = null;
@@ -508,7 +527,7 @@ public class ActionMenuManager {
                     String expression = m.optString("expression", "");
                     int weight = m.optInt("weight", 1);
                     String sound = m.optString("sound", null);
-                    if (sound != null && sound.isEmpty()) sound = null;
+                    if (sound.isEmpty()) sound = null;
 
                     // Parse choices
                     JSONArray choicesArr = m.optJSONArray("choices");
@@ -520,8 +539,7 @@ public class ActionMenuManager {
                             choices.add(new ChoiceItem(
                                     ch.optString("text", ""),
                                     ch.optString("group", ""),
-                                    ch.optString("motion", ""),
-                                    ch.optString("next_mtn", "")));
+                                    ch.optString("motion", "")));
                         }
                     }
 
@@ -551,21 +569,6 @@ public class ActionMenuManager {
                     data.motionGroups.put(groupName, groupItems);
                 }
             }
-
-            // Get group display names
-            String groupJson = Live2DNativeBridge.nativeGetGroupList();
-            if (groupJson != null && !groupJson.isEmpty()) {
-                JSONArray groupArray = new JSONArray(groupJson);
-                for (int i = 0; i < groupArray.length(); i++) {
-                    JSONObject g = groupArray.getJSONObject(i);
-                    String name = g.optString("name", "");
-                    String text = g.optString("text", "");
-                    if (!name.isEmpty() && !text.isEmpty()) {
-                        data.groupDisplayNames.put(name, text);
-                    }
-                }
-            }
-
 
         } catch (Exception e) {
             Log.w(TAG, "Failed to load native motion metadata", e);
@@ -707,7 +710,7 @@ public class ActionMenuManager {
                     JSONObject m = motionArray.optJSONObject(item.motionIndex);
                     if (m == null) continue;
                     String sound = m.optString("sound", m.optString("Sound", null));
-                    if (sound != null && !sound.isEmpty()) {
+                    if (!sound.isEmpty()) {
                         groupItems.set(idx, new MenuItem(item.label, item.motionGroup,
                                 item.motionIndex, item.expression, item.param,
                                 item.priority, item.fadeInTime, item.fadeOutTime,
@@ -766,7 +769,7 @@ public class ActionMenuManager {
                                 }
                             }
                             sound = motion.optString("Sound", null);
-                            if (sound != null && sound.isEmpty()) sound = null;
+                            if (sound.isEmpty()) sound = null;
                         }
                         groupItems.add(new MenuItem(label, group, i, null, null, 2, 0, 0, 1, null, null, sound));
                     }
@@ -874,6 +877,7 @@ public class ActionMenuManager {
      * Tapping uses VarFloat-aware selection on the native side to play
      * the correct entry based on the current state.
      */
+    @SuppressLint("SetTextI18n")
     private void addCompactItem(LinearLayout layout, String label, String motionGroup, View anchor) {
         Context context = layout.getContext();
         TextView tv = new TextView(context);
@@ -1079,7 +1083,7 @@ public class ActionMenuManager {
                 maxHeight, true);
         choicePopup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         choicePopup.setOutsideTouchable(true);
-        choicePopup.setWindowLayoutType(android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY);
+        choicePopup.setWindowLayoutType(overlayWindowType());
         choicePopup.setElevation(dp(context, 4));
 
         cancelTv.setOnClickListener(v -> choicePopup.dismiss());
@@ -1177,13 +1181,13 @@ public class ActionMenuManager {
     }
 
     private void showBothDisabledWarning(Context context, SharedPreferences prefs,
-                                          String key, boolean value,
-                                          androidx.appcompat.widget.SwitchCompat toggle) {
-        Log.w(TAG, "showBothDisabledWarning: key=[" + key + "] value=" + value + " toggle.isChecked=" + toggle.isChecked());
+                                          String key,
+                                         SwitchCompat toggle) {
+        Log.w(TAG, "showBothDisabledWarning: key=[" + key + "] toggle.isChecked=" + toggle.isChecked());
         showDialog(context, FileUtils.buildBothDisabledWarning(context, () -> {
-            Log.d(TAG, "BothDisabled revert: key=[" + key + "] = " + !value);
-            toggle.setChecked(!value);
-            prefs.edit().putBoolean(key, !value).apply();
+            Log.d(TAG, "BothDisabled revert: key=[" + key + "] = true");
+            toggle.setChecked(true);
+            prefs.edit().putBoolean(key, true).apply();
         }));
     }
 
@@ -1191,6 +1195,7 @@ public class ActionMenuManager {
         void onChanged(int value);
     }
 
+    @SuppressLint("SetTextI18n")
     private void addSliderItem(LinearLayout layout, String label, int initialValue,
                                 int min, int max, String suffix, SliderCallback onChanged) {
         Context context = layout.getContext();
@@ -1306,7 +1311,6 @@ public class ActionMenuManager {
     private static class MenuData {
         final List<MenuItem> expressions = new ArrayList<>();
         final LinkedHashMap<String, List<MenuItem>> motionGroups = new LinkedHashMap<>();
-        final LinkedHashMap<String, String> groupDisplayNames = new LinkedHashMap<>();
 
         boolean isEmpty() {
             return expressions.isEmpty() && motionGroups.isEmpty();
@@ -1334,12 +1338,6 @@ public class ActionMenuManager {
 
         MenuItem(String label, String motionGroup, int motionIndex, String expression,
                  String param, int priority, int fadeInTime, int fadeOutTime, int weight,
-                 List<ChoiceItem> choices, TimeLimitItem timeLimit) {
-            this(label, motionGroup, motionIndex, expression, param, priority, fadeInTime, fadeOutTime, weight, choices, timeLimit, null);
-        }
-
-        MenuItem(String label, String motionGroup, int motionIndex, String expression,
-                 String param, int priority, int fadeInTime, int fadeOutTime, int weight,
                  List<ChoiceItem> choices, TimeLimitItem timeLimit, String sound) {
             this.label = label;
             this.motionGroup = motionGroup;
@@ -1360,13 +1358,11 @@ public class ActionMenuManager {
         final String text;
         final String group;
         final String motion;
-        final String nextMtn;
 
-        ChoiceItem(String text, String group, String motion, String nextMtn) {
+        ChoiceItem(String text, String group, String motion) {
             this.text = text;
             this.group = group;
             this.motion = motion;
-            this.nextMtn = nextMtn;
         }
     }
 

@@ -3,7 +3,6 @@ package com.muxiao.deskpet.live2d;
 import android.content.Context;
 import android.graphics.PixelFormat;
 import android.opengl.GLSurfaceView;
-import android.util.AttributeSet;
 import android.view.Choreographer;
 
 /**
@@ -14,6 +13,8 @@ import android.view.Choreographer;
  * tells the GL thread to call nativeOnDrawFrame(). This keeps CPU/GPU usage low
  * when the pet is idle while still responding immediately to touch events.
  */
+// Instantiated programmatically by FloatingWindowService; never inflated from XML.
+@SuppressWarnings("unused")
 public class Live2DGLSurfaceView extends GLSurfaceView implements Choreographer.FrameCallback {
 
     private boolean animating = true;
@@ -21,11 +22,6 @@ public class Live2DGLSurfaceView extends GLSurfaceView implements Choreographer.
 
     public Live2DGLSurfaceView(Context context) {
         super(context);
-        init();
-    }
-
-    public Live2DGLSurfaceView(Context context, AttributeSet attrs) {
-        super(context, attrs);
         init();
     }
 
@@ -102,10 +98,5 @@ public class Live2DGLSurfaceView extends GLSurfaceView implements Choreographer.
         super.onResume();
         animating = true;
         Choreographer.getInstance().postFrameCallback(this);
-    }
-
-    @Override
-    public boolean performClick() {
-        return super.performClick();
     }
 }

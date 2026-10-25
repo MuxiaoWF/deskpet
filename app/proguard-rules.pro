@@ -25,7 +25,8 @@
 
 # ---------- AndroidX / Material ----------
 -keep class androidx.core.app.CoreComponentFactory { *; }
--keep class com.google.android.material.** {*;}
+# Material ships its own consumer keep rules; the theme-only usage here
+# (Theme.MaterialComponents parent) needs no additional explicit keeps.
 
 # ---------- Remove Log calls in release (smaller APK, no debug strings) ----------
 -assumenosideeffects class android.util.Log {
