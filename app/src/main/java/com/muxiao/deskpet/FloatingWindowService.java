@@ -646,6 +646,15 @@ public class FloatingWindowService extends Service {
                             .putInt("window_x", layoutParams.x)
                             .putInt("window_y", layoutParams.y)
                             .apply();
+                    // Edge-hide: snap to the nearest edge after dragging.
+                    // (EdgeHideManager.hide()/snapToEdge() previously had no caller,
+                    // so enabling the toggle in the menu did nothing.)
+                    if (edgeHideManager != null && edgeHideManager.isEnabled()
+                            && !edgeHideManager.isHidden()) {
+                        refreshScreenSize();
+                        edgeHideManager.snapToEdge(layoutParams, screenWidth, screenHeight);
+                        edgeHideManager.hide(glSurfaceView, windowManager, layoutParams);
+                    }
                 }
                 return true;
         }
