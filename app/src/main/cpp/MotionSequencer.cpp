@@ -706,7 +706,11 @@ static void OnFinishedInternal(const std::string& group, int index)
             PendingMotion target = *pending;
             pending->active = false;
             LAppModel* m = mgr->GetModel(static_cast<csmUint32>(slot));
-            if (m) m->StartMotion(target.group.c_str(), target.index, target.priority, nullptr, nullptr, target.fadeIn, target.fadeOut);
+            if (m) {
+                m->StartMotion(target.group.c_str(), target.index, target.priority, nullptr, nullptr, target.fadeIn, target.fadeOut);
+                // The real (post pre_mtn) motion notifies its text/sound too
+                JniBridgeC::NotifyMotionTextAndSound(mgr->FindMotionMeta(target.group, target.index));
+            }
         }
     } else {
         auto* pending = GetPendingMotionCubism2(mgr);
@@ -714,7 +718,10 @@ static void OnFinishedInternal(const std::string& group, int index)
             PendingMotion target = *pending;
             pending->active = false;
             LAppModelCubism2* m = mgr->GetCubism2Model(static_cast<csmUint32>(slot));
-            if (m) m->StartMotion(target.group.c_str(), target.index, target.priority, target.fadeIn, target.fadeOut);
+            if (m) {
+                m->StartMotion(target.group.c_str(), target.index, target.priority, target.fadeIn, target.fadeOut);
+                JniBridgeC::NotifyMotionTextAndSound(mgr->FindMotionMeta(target.group, target.index));
+            }
         }
     }
 }
@@ -951,11 +958,17 @@ void StartMotionFromString(const std::string& motionStr)
     int slot = mgr->GetSelectedModelSlot();
     if (slot < 0) slot = 0;
 
+    // Chained motions (pre_mtn target / next_mtn) notify their text/sound meta
+    // too, same as direct plays. Only the indexed path can resolve the meta —
+    // for a random fallback the index is unknown here.
+    const MotionMeta* chainMeta = (index >= 0) ? mgr->FindMotionMeta(group, index) : nullptr;
+
     if (mgr->IsCubism2Model()) {
         LAppModelCubism2* m = mgr->GetCubism2Model(static_cast<csmUint32>(slot));
         if (m) {
             if (index >= 0) {
                 m->StartMotion(group.c_str(), index, priority);
+                JniBridgeC::NotifyMotionTextAndSound(chainMeta);
             } else {
                 m->StartRandomMotion(group.c_str(), priority);
             }
@@ -965,6 +978,7 @@ void StartMotionFromString(const std::string& motionStr)
         if (m) {
             if (index >= 0) {
                 m->StartMotion(group.c_str(), index, priority);
+                JniBridgeC::NotifyMotionTextAndSound(chainMeta);
             } else {
                 m->StartRandomMotion(group.c_str(), priority);
             }
