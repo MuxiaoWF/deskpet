@@ -149,7 +149,7 @@ namespace {
                         int resolvedPriority = ResolveMotionPriority(mgr, groupName, i, priority);
                         model->StartMotion(groupName.c_str(), i, resolvedPriority, onFinished, onBegan);
                         const MotionMeta* meta = mgr->FindMotionMeta(groupName, i);
-                        JniBridgeC::NotifyMotionSoundForMeta(meta);
+                        JniBridgeC::NotifyMotionTextAndSound(meta);
                         return;
                     }
                 }
@@ -164,7 +164,7 @@ namespace {
         if (selected >= 0) {
             const MotionMeta* meta = mgr->FindMotionMeta(group, selected);
             model->StartMotion(group, selected, resolvedPriority, onFinished, onBegan);
-            JniBridgeC::NotifyMotionSoundForMeta(meta);
+            JniBridgeC::NotifyMotionTextAndSound(meta);
         } else {
             // Random fallback: pick a random index, start motion, and trigger sound.
             auto it = mgr->GetModelConfig().motions.find(group);
@@ -174,7 +174,7 @@ namespace {
                 int randomIdx = rand() % motionCount;
                 const MotionMeta* meta = mgr->FindMotionMeta(group, randomIdx);
                 model->StartMotion(group, randomIdx, resolvedPriority, onFinished, onBegan);
-                JniBridgeC::NotifyMotionSoundForMeta(meta);
+                JniBridgeC::NotifyMotionTextAndSound(meta);
             }
         }
     }
@@ -198,7 +198,7 @@ namespace {
                         model->StartMotion(groupName.c_str(), i, resolvedPriority);
                         MotionSequencer::SyncVarFloatPartOverrides();
                         const MotionMeta* meta = mgr->FindMotionMeta(groupName, i);
-                        JniBridgeC::NotifyMotionSoundForMeta(meta);
+                        JniBridgeC::NotifyMotionTextAndSound(meta);
                         return;
                     }
                 }
@@ -216,7 +216,7 @@ namespace {
             model->StartMotion(group, selected, resolvedPriority);
             MotionSequencer::SyncVarFloatPartOverrides();
             const MotionMeta* meta = mgr->FindMotionMeta(group, selected);
-            JniBridgeC::NotifyMotionSoundForMeta(meta);
+            JniBridgeC::NotifyMotionTextAndSound(meta);
         } else {
             auto it = mgr->GetModelConfig().motions.find(group);
             int motionCount = (it != mgr->GetModelConfig().motions.end())
@@ -227,9 +227,32 @@ namespace {
                 model->StartMotion(group, randomIdx, resolvedPriority);
                 MotionSequencer::SyncVarFloatPartOverrides();
                 const MotionMeta* meta = mgr->FindMotionMeta(group, randomIdx);
-                JniBridgeC::NotifyMotionSoundForMeta(meta);
+                JniBridgeC::NotifyMotionTextAndSound(meta);
             }
         }
+    }
+
+    /// Pick a random motion from a group, start it and notify Java about its
+    /// text/sound meta. Selecting the index here (instead of StartRandomMotion)
+    /// lets the notification match the motion that actually plays.
+    void PlayRandomWithMeta(LAppModel* model, const std::string& group, int priority) {
+        LAppLive2DManager* mgr = LAppLive2DManager::GetInstance();
+        if (!model || model->GetModelSetting() == nullptr) return;
+        const csmInt32 count = model->GetModelSetting()->GetMotionCount(group.c_str());
+        if (count <= 0) return;
+        const csmInt32 no = rand() % count;
+        model->StartMotion(group.c_str(), no, priority);
+        JniBridgeC::NotifyMotionTextAndSound(mgr->FindMotionMeta(group, no));
+    }
+
+    void PlayRandomWithMeta(LAppModelCubism2* model, const std::string& group, int priority) {
+        LAppLive2DManager* mgr = LAppLive2DManager::GetInstance();
+        if (!model || !model->IsInitialized() || model->GetModelSetting() == nullptr) return;
+        const csmInt32 count = model->GetModelSetting()->GetMotionCount(group.c_str());
+        if (count <= 0) return;
+        const csmInt32 no = rand() % count;
+        model->StartMotion(group.c_str(), no, priority);
+        JniBridgeC::NotifyMotionTextAndSound(mgr->FindMotionMeta(group, no));
     }
 
     /// Start a random motion from a group on the selected model slot (or all models).
@@ -238,13 +261,11 @@ namespace {
         int sel = mgr->GetSelectedModelSlot();
         for (csmUint32 i = 0; i < mgr->GetModelCount(); i++) {
             if (sel >= 0 && static_cast<int>(i) != sel) continue;
-            LAppModel* m = mgr->GetModel(i);
-            if (m) m->StartRandomMotion(group, priority);
+            PlayRandomWithMeta(mgr->GetModel(i), group, priority);
         }
         for (csmUint32 i = 0; i < mgr->GetCubism2ModelNum(); i++) {
             if (sel >= 0 && static_cast<int>(i) != sel) continue;
-            LAppModelCubism2* m = mgr->GetCubism2Model(i);
-            if (m) m->StartRandomMotion(group, priority);
+            PlayRandomWithMeta(mgr->GetCubism2Model(i), group, priority);
         }
     }
 
@@ -1418,6 +1439,20 @@ void LAppLive2DManager::OnTap(csmFloat32 x, csmFloat32 y, bool wasDragging) {
             hit = true;
             break;  // Only the frontmost model responds
         }
+    }
+}
+
+void LAppLive2DManager::StartRandomMotionNotified(const char* group, int priority) {
+    if (group == nullptr || group[0] == '\0') return;
+    const std::string groupStr(group);
+    const int sel = _selectedModelSlot;
+    for (csmUint32 i = 0; i < _models.GetSize(); i++) {
+        if (sel >= 0 && static_cast<int>(i) != sel) continue;
+        PlayRandomWithMeta(GetModel(i), groupStr, priority);
+    }
+    for (csmUint32 i = 0; i < _modelsCubism2.GetSize(); i++) {
+        if (sel >= 0 && static_cast<int>(i) != sel) continue;
+        PlayRandomWithMeta(_modelsCubism2[i], groupStr, priority);
     }
 }
 

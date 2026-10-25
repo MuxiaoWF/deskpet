@@ -75,6 +75,12 @@ public:
     std::map<std::string, float>& GetParamOverrides() { return _paramOverrides; }
     void ToggleParam(const char* paramName);
 
+    /// Start a random motion from a group on the selected (or first) model and
+    /// notify Java about the motion's text/sound metadata. Used by features
+    /// outside this TU (e.g. RandomSpeaker) so they behave exactly like the
+    /// menu/tap triggered paths.
+    void StartRandomMotionNotified(const char* group, int priority);
+
     // Part opacity overrides (for component/clothing visibility toggle via Group ids)
     const std::map<std::string, float>& GetPartOverrides() const { return _partOverrides; }
     std::map<std::string, float>& GetPartOverrides() { return _partOverrides; }

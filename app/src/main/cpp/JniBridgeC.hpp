@@ -16,6 +16,11 @@ public:
     static void NotifyMotionSound(const char* soundPath, int delayMs);
     static void NotifyMotionSoundForMeta(const MotionMeta* meta);
 
+    /// Notify Java side about BOTH the motion text bubble and the motion sound
+    /// described by the meta. Single entry point so every motion start path
+    /// (menu, tap, hit-area down/up, gesture, random speak) stays consistent.
+    static void NotifyMotionTextAndSound(const MotionMeta* meta);
+
     /// Notify Java side that a costume change occurred.
     /// \param costumeName The costume set name that was activated
     /// \param groupName The group target that was toggled (empty for set-level changes)

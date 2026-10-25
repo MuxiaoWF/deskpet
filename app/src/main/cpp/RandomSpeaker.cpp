@@ -56,13 +56,11 @@ void RandomSpeaker::Update(float dt) {
         const int idx = rand() % static_cast<int>(_eligibleGroups.size());
         const std::string& group = _eligibleGroups[idx];
 
+        // Pick a random group and play it through the manager so the motion's
+        // text bubble / sound metadata is notified to Java (previously the
+        // direct StartRandomMotion call bypassed both notifications, leaving
+        // "random speak" motions silent and without their text).
         LAppLive2DManager* mgr = LAppLive2DManager::GetInstance();
-        if (mgr->IsCubism2Model()) {
-            LAppModelCubism2* m = mgr->GetCubism2Model(0);
-            if (m) m->StartRandomMotion(group.c_str(), 1);  // PriorityIdle
-        } else {
-            LAppModel* m = mgr->GetModel(0);
-            if (m) m->StartRandomMotion(group.c_str(), 1);  // PriorityIdle
-        }
+        mgr->StartRandomMotionNotified(group.c_str(), 1);  // PriorityIdle
     }
 }

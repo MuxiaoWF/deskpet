@@ -128,6 +128,16 @@ void JniBridgeC::NotifyMotionSoundForMeta(const MotionMeta* meta)
     }
 }
 
+void JniBridgeC::NotifyMotionTextAndSound(const MotionMeta* meta)
+{
+    if (meta == nullptr) return;
+    if (!meta->text.empty()) {
+        NotifyMotionText(meta->text.c_str(),
+            meta->text_duration > 0 ? meta->text_duration : 3000, meta->text_delay);
+    }
+    NotifyMotionSoundForMeta(meta);
+}
+
 void JniBridgeC::NotifyCostumeChanged(const char* costumeName, const char* groupName)
 {
     JNIEnv* env = GetEnv();
@@ -291,12 +301,7 @@ extern "C"
 
         // Notify about motion text and sound if available
         const MotionMeta* meta = mgr->FindMotionMeta(std::string(group), index);
-        if (meta != nullptr) {
-            if (!meta->text.empty()) {
-                NotifyMotionText(meta->text.c_str(), meta->text_duration > 0 ? meta->text_duration : 3000, meta->text_delay);
-            }
-            JniBridgeC::NotifyMotionSoundForMeta(meta);
-        }
+        JniBridgeC::NotifyMotionTextAndSound(meta);
 
         // VarFloat evaluation is DEFERRED to the MotionSequencer's OnFinishedInternal
         // callback (set up by SetupMotionCallbacks inside StartMotion).
@@ -349,10 +354,7 @@ extern "C"
 
             // Notify about motion text and sound
             if (meta != nullptr) {
-                if (!meta->text.empty()) {
-                    NotifyMotionText(meta->text.c_str(), meta->text_duration > 0 ? meta->text_duration : 3000, meta->text_delay);
-                }
-                JniBridgeC::NotifyMotionSoundForMeta(meta);
+                JniBridgeC::NotifyMotionTextAndSound(meta);
             }
         } else {
             // No VarFloat match — fall back to random

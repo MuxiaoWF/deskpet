@@ -1,4 +1,5 @@
 #include "ControllerEngine.hpp"
+#include "JniBridgeC.hpp"
 #include "LAppLive2DManager.hpp"
 #include "LAppModel.hpp"
 #include "LAppModelCubism2.hpp"
@@ -134,7 +135,11 @@ void ControllerEngine::TriggerMotion(const std::string& motionStr) {
                 }
             }
         }
-        if (m) m->StartMotion(group.c_str(), index, 3, 0.5f, 0.5f);
+        if (m) {
+            m->StartMotion(group.c_str(), index, 3, 0.5f, 0.5f);
+            // Gesture-triggered motions notify their text/sound meta too
+            JniBridgeC::NotifyMotionTextAndSound(mgr->FindMotionMeta(group, index));
+        }
     } else {
         auto* m = static_cast<LAppModel*>(nullptr);
         const int selectedSlot = mgr->GetSelectedModelSlot();
@@ -154,7 +159,10 @@ void ControllerEngine::TriggerMotion(const std::string& motionStr) {
                 }
             }
         }
-        if (m) m->StartMotion(group.c_str(), index, 3.0f, nullptr, nullptr, 0.5f, 0.5f);
+        if (m) {
+            m->StartMotion(group.c_str(), index, 3.0f, nullptr, nullptr, 0.5f, 0.5f);
+            JniBridgeC::NotifyMotionTextAndSound(mgr->FindMotionMeta(group, index));
+        }
     }
 }
 
