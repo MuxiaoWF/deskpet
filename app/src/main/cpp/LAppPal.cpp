@@ -5,6 +5,7 @@
 #include <cerrno>
 #include <sys/stat.h>
 #include <sys/mman.h>
+#include <unistd.h>   // sysconf(_SC_PAGESIZE) — not pulled in transitively on newer NDKs
 #include <ctime>
 #include <iostream>
 #include <fstream>

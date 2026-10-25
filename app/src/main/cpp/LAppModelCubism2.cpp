@@ -8,6 +8,7 @@
 #include "MotionSequencer.hpp"
 #include "MotionGroupUtils.hpp"
 #include "ControllerEngine.hpp"
+#include "TriangleHitTest.hpp"
 #include "third_party/nlohmann/json.hpp"
 
 #include <cstring>
@@ -552,41 +553,49 @@ void LAppModelCubism2::SetDragging(csmFloat32 x, csmFloat32 y)
     _dragY = y;
 }
 
-csmBool LAppModelCubism2::HitTest(const csmChar* hitAreaName, csmFloat32 x, csmFloat32 y)
+csmBool LAppModelCubism2::HitTest(const csmChar* hitAreaId, const csmChar* hitAreaName,
+                                  csmFloat32 x, csmFloat32 y, bool checkVisibility)
 {
-    if(!_modelSetting || !_mocLoader) return false;
+    if (!_modelSetting || !_mocLoader) return false;
 
-    // x, y are NDC [-1,1]. AABB regions are in canvas space.
-    // Convert NDC → canvas via model matrix inverse.
-    // Note: this is approximate — the projection's aspect ratio scale is not inverted.
-    // For portrait models on portrait screens the error is small.
-    csmFloat32 canvasX = _modelMatrix.InvertTransformX(x);
-    csmFloat32 canvasY = _modelMatrix.InvertTransformY(y);
-
-    for (csmInt32 i = 0; i < _modelSetting->GetHitAreasCount(); i++)
+    // Resolve the hit area to a concrete drawable: prefer the Id, fall back to
+    // the Name (older model.json files sometimes only define meaningful names).
+    csmInt32 drawableIdx = -1;
+    if (hitAreaId != nullptr && hitAreaId[0] != '\0')
     {
-        if (strcmp(_modelSetting->GetHitAreaName(i), hitAreaName) == 0)
-        {
-            csmFloat32 cw = _mocLoader->GetCanvasWidth();
-            csmFloat32 ch = _mocLoader->GetCanvasHeight();
-            const csmFloat32 cx = cw / 2.0F;
-            csmFloat32 cy = ch / 2.0F;
-            csmFloat32 hw = cw * 0.25F;
-            csmFloat32 hh = ch * 0.25F;
-
-            if (strstr(hitAreaName, "Head") || strstr(hitAreaName, "head"))
-            { cy = ch * 0.75F; hw = cw * 0.2F; hh = ch * 0.15F; }
-            else if (strstr(hitAreaName, "Face") || strstr(hitAreaName, "face"))
-            { cy = ch * 0.7F; hw = cw * 0.18F; hh = ch * 0.12F; }
-            else if (strstr(hitAreaName, "Body") || strstr(hitAreaName, "body"))
-            { cy = ch * 0.4F; hw = cw * 0.25F; hh = ch * 0.25F; }
-            else if (strstr(hitAreaName, "Hair") || strstr(hitAreaName, "hair"))
-            { cy = ch * 0.8F; hw = cw * 0.22F; hh = ch * 0.12F; }
-
-            return (canvasX >= cx - hw && canvasX <= cx + hw && canvasY >= cy - hh && canvasY <= cy + hh);
-        }
+        drawableIdx = _mocLoader->FindDrawableIndex(hitAreaId);
     }
-    return false;
+    if (drawableIdx < 0 && hitAreaName != nullptr && hitAreaName[0] != '\0')
+    {
+        drawableIdx = _mocLoader->FindDrawableIndex(hitAreaName);
+    }
+    if (drawableIdx < 0)
+    {
+        LAppPal::PrintLogLn("[Cubism2] HitTest: no drawable for hit area id=[%s] name=[%s]",
+                            hitAreaId ? hitAreaId : "", hitAreaName ? hitAreaName : "");
+        return false;
+    }
+
+    const Cubism2MocData& moc = _mocLoader->GetMocData();
+    if (drawableIdx >= static_cast<csmInt32>(moc.drawables.size())) return false;
+    const auto& drawable = moc.drawables[drawableIdx];
+    if (drawable.vertexCount <= 0 || drawable.indices.empty()) return false;
+    if (checkVisibility && drawable.opacity <= 0.0F) return false;
+
+    csmInt32 vertCount = 0;
+    const csmFloat32* verts = _mocLoader->GetDrawablePositions(drawableIdx, vertCount);
+    if (!verts || vertCount <= 0) return false;
+
+    // Map the view-space point into canvas space through the full last-frame
+    // MVP inverse (aspect / mirror / rotation aware), then test the drawable's
+    // deformed triangles directly.
+    CubismMatrix44 mvp = _lastFrameMVP;
+    float canvasX, canvasY;
+    TriangleHitTest::TransformPointToLocal(&mvp, x, y, canvasX, canvasY);
+
+    return TriangleHitTest::HitTestTriangles(canvasX, canvasY, verts, vertCount,
+                                             drawable.indices.data(),
+                                             static_cast<csmInt32>(drawable.indices.size()));
 }
 
 csmString LAppModelCubism2::GetIdleMotionGroup() const
@@ -790,6 +799,10 @@ void LAppModelCubism2::Draw(CubismMatrix44& matrix)
     if(!_initialized || !_mocLoader) return;
 
     matrix.MultiplyByMatrix(&_modelMatrix);
+
+    // Cache the final MVP for hit testing (must match the matrix used for rendering)
+    _lastFrameMVP = matrix;
+
     _mocLoader->Draw(matrix.GetArray());
 }
 

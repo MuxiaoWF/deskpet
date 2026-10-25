@@ -21,6 +21,29 @@ inline bool& AabbOnlyMode() {
     return flag;
 }
 
+/// Transform a screen-space (view-space) point into model-local space using the
+/// FULL matrix inverse. CubismMatrix44::InvertTransformX/Y only divide by the
+/// diagonal ((src - t) / scale), which cannot undo rotation/shear terms; this
+/// helper must be used whenever the MVP may contain rotation or mirroring.
+inline void TransformPointToLocal(CubismMatrix44* mvpMatrix,
+                                  csmFloat32 screenX, csmFloat32 screenY,
+                                  csmFloat32& outX, csmFloat32& outY)
+{
+    if (!mvpMatrix)
+    {
+        outX = screenX;
+        outY = screenY;
+        return;
+    }
+    // GetInvert() returns a value; keep a mutable copy because GetArray()
+    // is not marked const in the SDK.
+    CubismMatrix44 inv = mvpMatrix->GetInvert();
+    const csmFloat32* t = inv.GetArray();
+    // 2D point with z = 0: local = inv * (x, y, 0, 1)
+    outX = t[0] * screenX + t[4] * screenY + t[12];
+    outY = t[1] * screenX + t[5] * screenY + t[13];
+}
+
 /// Check if a point (px, py) lies inside the triangle defined by (ax,ay), (bx,by), (cx,cy).
 /// Uses the cross-product sign method for numerical stability.
 inline bool PointInTriangle(float px, float py,
@@ -112,8 +135,9 @@ inline bool HitTestDrawable(CubismModel* model, csmInt32 drawableIndex,
     if (!vertices || !indices) return false;
 
     // Transform screen point to model-local space via full MVP inverse
-    const float localX = mvpMatrix->InvertTransformX(screenX);
-    const float localY = mvpMatrix->InvertTransformY(screenY);
+    // (handles mirror, rotation and aspect-ratio scaling)
+    csmFloat32 localX, localY;
+    TransformPointToLocal(mvpMatrix, screenX, screenY, localX, localY);
 
     return HitTestTriangles(localX, localY, vertices, vertCount, indices, indexCount);
 }

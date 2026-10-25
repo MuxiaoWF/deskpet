@@ -280,8 +280,8 @@ namespace {
                             if (vy > maxY) maxY = vy;
                         }
                         CubismMatrix44 mvpCopy = mvp;
-                        float localX = mvpCopy.InvertTransformX(hitX);
-                        float localY = mvpCopy.InvertTransformY(hitY);
+                        float localX, localY;
+                        TriangleHitTest::TransformPointToLocal(&mvpCopy, hitX, hitY, localX, localY);
                         float cx = (minX + maxX) * 0.5f;
                         float cy = (minY + maxY) * 0.5f;
                         float w = maxX - minX;
@@ -293,8 +293,8 @@ namespace {
             // Fallback: static AABB from config (rest-pose)
             if (config.width <= 0 || config.height <= 0) return false;
             CubismMatrix44 mvpCopy = mvp;
-            float localX = mvpCopy.InvertTransformX(hitX);
-            float localY = mvpCopy.InvertTransformY(hitY);
+            float localX, localY;
+            TriangleHitTest::TransformPointToLocal(&mvpCopy, hitX, hitY, localX, localY);
             float dx = localX - config.centerX;
             float dy = localY - config.centerY;
             return std::abs(dx) <= config.width * 0.5f && std::abs(dy) <= config.height * 0.5f;
@@ -587,10 +587,16 @@ void LAppLive2DManager::OnHitAreaBegan(csmFloat32 x, csmFloat32 y) {
         if (setting == nullptr) continue;
         for (csmInt32 h = 0; h < setting->GetHitAreasCount(); h++) {
             const csmChar *areaName = setting->GetHitAreaName(h);
+            const CubismIdHandle drawID = setting->GetHitAreaId(h);
+            const csmChar *areaId = drawID ? drawID->GetString().GetRawString() : "";
             for (size_t c = 0; c < _hitAreaConfigs.size(); c++) {
                 if (!_hitAreaConfigs[c].enabled) continue;
                 if (_hitAreaConfigs[c].id == areaName || _hitAreaConfigs[c].name == areaName) {
-                    if (model->HitTest(areaName, hitX, hitY)) {
+                    // Same visibility rules as the Cubism3 IsHitAreaHit path:
+                    // toggle/ignore_visibility areas stay tappable when hidden.
+                    bool isToggle = !_hitAreaConfigs[c].param.empty() && !_hitAreaConfigs[c].values.empty();
+                    bool checkVis = !(_hitAreaConfigs[c].ignore_visibility || isToggle);
+                    if (model->HitTest(areaId, areaName, hitX, hitY, checkVis)) {
                         _pressedHitAreaIndex = static_cast<int>(c);
                         std::string downMotion = _hitAreaConfigs[c].downMtn;
                         LAppPal::PrintLogLn("[Touch] HitAreaBegan(C2): pos=(%.1f,%.1f) area=[%s] downGroup=[%s]",
@@ -625,7 +631,8 @@ void LAppLive2DManager::OnHitAreaEnded(csmFloat32 x, csmFloat32 y) {
 }
 
 void LAppLive2DManager::OnDragWithHitArea(csmFloat32 x, csmFloat32 y) {
-    // Transform touch coords for mirror/rotation so hit areas match visual position
+    // Apply touch calibration (offset/scale). Mirror/rotation are handled inside
+    // the hit tests via the full last-frame MVP inverse.
     float hitX, hitY;
     TransformTouchForModelTransform(x, y, hitX, hitY);
 
@@ -689,10 +696,14 @@ void LAppLive2DManager::OnDragWithHitArea(csmFloat32 x, csmFloat32 y) {
             }
             for (csmInt32 h = 0; h < setting->GetHitAreasCount(); h++) {
                 const csmChar *areaName = setting->GetHitAreaName(h);
+                const CubismIdHandle drawID = setting->GetHitAreaId(h);
+                const csmChar *areaId = drawID ? drawID->GetString().GetRawString() : "";
                 for (size_t c = 0; c < _hitAreaConfigs.size(); c++) {
                     if (!_hitAreaConfigs[c].enabled) continue;
                     if (_hitAreaConfigs[c].id == areaName || _hitAreaConfigs[c].name == areaName) {
-                        if (model->HitTest(areaName, hitX, hitY)) {
+                        bool isToggle = !_hitAreaConfigs[c].param.empty() && !_hitAreaConfigs[c].values.empty();
+                        bool checkVis = !(_hitAreaConfigs[c].ignore_visibility || isToggle);
+                        if (model->HitTest(areaId, areaName, hitX, hitY, checkVis)) {
                             newHitIndex = static_cast<int>(c);
                             goto done_hit_check;
                         }
@@ -1169,7 +1180,8 @@ void LAppLive2DManager::OnTap(csmFloat32 x, csmFloat32 y, bool wasDragging) {
         dragAlreadyHandled = true;
     }
 
-    // Transform touch coords for mirror/rotation so hit areas match visual position
+    // Apply touch calibration (offset/scale). Mirror/rotation are handled inside
+    // the hit tests via the full last-frame MVP inverse.
     float hitX, hitY;
     TransformTouchForModelTransform(x, y, hitX, hitY);
 
@@ -1315,6 +1327,8 @@ void LAppLive2DManager::OnTap(csmFloat32 x, csmFloat32 y, bool wasDragging) {
             if (setting != nullptr && !_hitAreaConfigs.empty()) {
                 for (csmInt32 h = 0; h < setting->GetHitAreasCount(); h++) {
                     const csmChar *areaName = setting->GetHitAreaName(h);
+                    const CubismIdHandle drawID = setting->GetHitAreaId(h);
+                    const csmChar *areaId = drawID ? drawID->GetString().GetRawString() : "";
 
                     HitAreaConfig *matched = nullptr;
                     int matchedIdx = -1;
@@ -1327,7 +1341,10 @@ void LAppLive2DManager::OnTap(csmFloat32 x, csmFloat32 y, bool wasDragging) {
                         }
                     }
 
-                    if (!model->HitTest(areaName, hitX, hitY)) continue;
+                    // Same visibility rules as the Cubism3 path in IsHitAreaHit
+                    bool isToggle = (matched != nullptr) && !matched->param.empty() && !matched->values.empty();
+                    bool checkVis = (matched == nullptr) || !(matched->ignore_visibility || isToggle);
+                    if (!model->HitTest(areaId, areaName, hitX, hitY, checkVis)) continue;
 
                     if (matched != nullptr) {
                         // Dispatch param toggle only if: touch ended on the same area that was pressed,
@@ -1454,83 +1471,24 @@ void LAppLive2DManager::ToggleParam(const char *paramName) {
 
 void LAppLive2DManager::TransformTouchForModelTransform(float touchX, float touchY,
                                                          float& outX, float& outY) const {
-    // Fast path: no transform needed
-    if (!_mirror && _rotation == 0.0f && _touchScale == 1.0F
-        && _touchOffsetX == 0.0F && _touchOffsetY == 0.0F) {
-        outX = touchX;
-        outY = touchY;
-        return;
-    }
-
-    // Step 1: Apply floating window offset (pixel → model-local)
+    // Apply touch calibration only (offset + inverse pinch scale).
+    //
+    // Mirror and rotation are deliberately NOT undone here. Every hit-test path
+    // converts the (calibrated) view-space point to model-local space via the
+    // full last-frame MVP inverse (TriangleHitTest::TransformPointToLocal),
+    // which already accounts for mirror, rotation and aspect-ratio scaling.
+    // Pre-undoing those transforms here would invert them twice and make taps
+    // land on the mirrored/wrong side of the model.
     float x = touchX - _touchOffsetX;
     float y = touchY - _touchOffsetY;
 
-    // Step 2: Apply scale (inverse of model scale from pinch zoom)
     if (_touchScale > 0.0F && _touchScale != 1.0F) {
         x /= _touchScale;
         y /= _touchScale;
     }
 
-    // If only offset/scale changed (no mirror/rotation), we're done
-    if (!_mirror && _rotation == 0.0f) {
-        outX = x;
-        outY = y;
-        return;
-    }
-
-    // Step 3: Convert to intermediate space (inverse of base projection)
-    int width = LAppDelegate::GetInstance()->GetWindowWidth();
-    int height = LAppDelegate::GetInstance()->GetWindowHeight();
-    if (width <= 0 || height <= 0) {
-        outX = x;
-        outY = y;
-        return;
-    }
-
-    float aspectRatio = static_cast<float>(width) / static_cast<float>(height);
-    float displayRatio = static_cast<float>(height) / static_cast<float>(width);
-
-    float canvasRatio = 1.0f;
-    if (_models.GetSize() > 0 && _models[0] && _models[0]->GetModel()) {
-        canvasRatio = _models[0]->GetModel()->GetCanvasHeight()
-                    / _models[0]->GetModel()->GetCanvasWidth();
-    } else if (_modelsCubism2.GetSize() > 0 && _modelsCubism2[0]
-               && _modelsCubism2[0]->IsInitialized()) {
-        float cw = _modelsCubism2[0]->GetCanvasWidth();
-        canvasRatio = (cw > 0) ? _modelsCubism2[0]->GetCanvasHeight() / cw : 1.0f;
-    }
-
-    float invProjX, invProjY;
-    if (canvasRatio < displayRatio) {
-        invProjX = 1.0f;
-        invProjY = 1.0f / aspectRatio;
-    } else {
-        invProjX = aspectRatio;
-        invProjY = 1.0f;
-    }
-
-    float ix = x * invProjX;
-    float iy = y * invProjY;
-
-    // Step 4: Apply inverse mirror (flip X around model center)
-    if (_mirror) {
-        ix = -ix;
-    }
-
-    // Step 5: Apply inverse rotation around model center (0,0)
-    if (_rotation != 0.0f) {
-        float rad = -_rotation * 3.14159265f / 180.0f;
-        float c = cosf(rad), s = sinf(rad);
-        float rx = ix * c - iy * s;
-        float ry = ix * s + iy * c;
-        ix = rx;
-        iy = ry;
-    }
-
-    // Step 6: Re-apply base projection
-    outX = ix / invProjX;
-    outY = iy / invProjY;
+    outX = x;
+    outY = y;
 }
 
 void LAppLive2DManager::OnUpdate() {
@@ -1644,7 +1602,10 @@ void LAppLive2DManager::OnUpdate() {
         // BEFORE view matrix. Model center is (0,0) here, so transforms
         // are naturally centered on the model.
         if (_mirror) {
-            projection.Scale(-1.0f, 1.0f);
+            // Negate the existing X scale instead of Scale(-1,1): CubismMatrix44::Scale
+            // OVERWRITES the diagonal, which would discard the aspect-ratio correction
+            // applied above on non-square viewports.
+            projection.GetArray()[0] = -projection.GetArray()[0];
         }
         if (_rotation != 0.0f) {
             float rad = _rotation * 3.14159265f / 180.0f;
@@ -1729,7 +1690,10 @@ void LAppLive2DManager::OnUpdate() {
         // BEFORE view matrix. Model center is (0,0) here, so transforms
         // are naturally centered on the model.
         if (_mirror) {
-            projection.Scale(-1.0f, 1.0f);
+            // Negate the existing X scale instead of Scale(-1,1): CubismMatrix44::Scale
+            // OVERWRITES the diagonal, which would discard the aspect-ratio correction
+            // applied above on non-square viewports.
+            projection.GetArray()[0] = -projection.GetArray()[0];
         }
         if (_rotation != 0.0f) {
             float rad = _rotation * 3.14159265f / 180.0f;

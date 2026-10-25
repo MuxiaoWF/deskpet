@@ -980,6 +980,30 @@ Csm::csmInt32 Cubism2MocLoader::FindDrawableIndex(const char* drawableId) const
     return -1;
 }
 
+const Csm::csmFloat32* Cubism2MocLoader::GetDrawablePositions(Csm::csmInt32 drawableIndex,
+                                                              Csm::csmInt32& outVertexCount) const
+{
+    outVertexCount = 0;
+    if (drawableIndex < 0 || drawableIndex >= static_cast<Csm::csmInt32>(_data.drawables.size()))
+        return nullptr;
+    if (drawableIndex >= static_cast<Csm::csmInt32>(_buffers.size()))
+        return nullptr;
+
+    const auto& buf = _buffers[drawableIndex];
+    // Update() writes into positions[currentBuffer] and uploads it, so the
+    // current buffer always holds the freshest deformed positions.
+    const std::vector<Csm::csmFloat32>& positions = buf.positions[buf.currentBuffer];
+    if (positions.empty())
+        return nullptr;
+
+    outVertexCount = _data.drawables[drawableIndex].vertexCount;
+    if (outVertexCount <= 0 ||
+        positions.size() < static_cast<size_t>(outVertexCount) * 2)
+        return nullptr;
+
+    return positions.data();
+}
+
 void Cubism2MocLoader::SetDrawableOpacityById(const char* drawableId, Csm::csmFloat32 opacity)
 {
     Csm::csmInt32 idx = FindDrawableIndex(drawableId);

@@ -138,6 +138,12 @@ public:
     /// Get drawable index by ID. Returns -1 if not found.
     Csm::csmInt32 FindDrawableIndex(const char* drawableId) const;
 
+    /// Get the current deformed vertex positions (canvas space, x/y interleaved)
+    /// of a drawable, as computed by the most recent Update(). Used for hit testing.
+    /// Returns nullptr when the drawable is invalid or has no vertex data.
+    const Csm::csmFloat32* GetDrawablePositions(Csm::csmInt32 drawableIndex,
+                                                Csm::csmInt32& outVertexCount) const;
+
     /// Set global depth offset for render order biasing.
     void SetDepthOffset(Csm::csmFloat32 offset) { _depthOffset = offset; }
 

@@ -83,7 +83,19 @@ public:
     void LastExpression();
 
     void SetDragging(Csm::csmFloat32 x, Csm::csmFloat32 y);
-    Csm::csmBool HitTest(const Csm::csmChar* hitAreaName, Csm::csmFloat32 x, Csm::csmFloat32 y);
+    /// Geometry-accurate hit test against the hit area's drawable.
+    /// @param hitAreaId     Hit area Id from model.json (preferred lookup key)
+    /// @param hitAreaName   Hit area Name (fallback lookup key)
+    /// @param x, y          View-space coords ([-1,1]); the full last-frame MVP
+    ///                      inverse maps them into canvas space, so mirror,
+    ///                      rotation and aspect ratio are all accounted for.
+    /// @param checkVisibility Skip drawables hidden by opacity when true
+    Csm::csmBool HitTest(const Csm::csmChar* hitAreaId, const Csm::csmChar* hitAreaName,
+                         Csm::csmFloat32 x, Csm::csmFloat32 y, bool checkVisibility = true);
+
+    /// Cached full MVP (projection * model matrix) from the last Draw() call.
+    /// Used by HitTest so hit positions always match what is on screen.
+    const Csm::CubismMatrix44& GetLastFrameMVP() const { return _lastFrameMVP; }
 
     Cubism2ModelSetting* GetModelSetting() const { return _modelSetting; }
     Csm::CubismModelMatrix* GetModelMatrix() { return &_modelMatrix; }
@@ -211,6 +223,7 @@ private:
     LookAtParams _lookAtParams;
 
     Csm::CubismModelMatrix _modelMatrix;
+    Csm::CubismMatrix44 _lastFrameMVP;
     Csm::csmFloat32 _dragX, _dragY;
     bool _initialized;
 

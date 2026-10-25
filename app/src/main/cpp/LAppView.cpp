@@ -211,7 +211,9 @@ void LAppView::PostModelDraw(LAppModel &refModel)
     // Apply mirror/rotation in intermediate space (same as OnUpdate)
     auto* mgr = LAppLive2DManager::GetInstance();
     if (mgr->IsMirrored()) {
-        mvp.Scale(-1.0F, 1.0F);
+        // Negate X scale (Scale() would overwrite the diagonal and drop the
+        // aspect-ratio correction — must mirror OnUpdate's projection exactly)
+        mvp.GetArray()[0] = -mvp.GetArray()[0];
     }
     float rot = mgr->GetRotation();
     if (rot != 0.0F) {
