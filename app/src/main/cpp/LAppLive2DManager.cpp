@@ -2741,6 +2741,183 @@ void LAppLive2DManager::InferGroupsFromMotionCurves() {
     }
 }
 
+/// Evidence-driven disambiguation for toggle VarFloats whose name-similarity
+/// match was ambiguous (dropped by Layer 1's exact-first claiming).
+///
+/// Toggle motions are two entries sharing one VarFloat:
+///   entry "on":  [Type=1 cond == V1] [Type=2 assign V0]
+///   entry "off": [Type=1 cond == V0] [Type=2 assign V1]
+/// Their PartOpacity curves are complementary: the "off" entry drives the
+/// controlled Part to 0, the "on" entry back to 1. A Part that BOTH entries
+/// touch with opposite extremes is therefore the VarFloat's true target —
+/// evidence from the motion data itself, immune to naming conventions
+/// (pinyin vs Chinese vs abbreviations).
+void LAppLive2DManager::DisambiguateByMotionEvidence(const std::vector<std::string>& droppedVarFloats) {
+    if (_lastModelPath.empty() || droppedVarFloats.empty()) return;
+
+    std::string modelDir;
+    size_t lastSlash = _lastModelPath.rfind('/');
+    if (lastSlash != std::string::npos) {
+        modelDir = _lastModelPath.substr(0, lastSlash + 1);
+    }
+
+    int resolved = 0;
+    for (const auto& vfName : droppedVarFloats) {
+        // Gather the toggle group(s) that reference this VarFloat
+        std::vector<std::string> groupNames;
+        for (const auto& kv : _modelConfig.motions) {
+            if (!MotionSequencer::IsToggleGroup(kv.first)) continue;
+            for (const auto& meta : kv.second) {
+                for (const auto& vf : meta.var_floats) {
+                    if (vf.name == vfName) { groupNames.push_back(kv.first); break; }
+                }
+                if (!groupNames.empty() && groupNames.back() == kv.first) break;
+            }
+        }
+        if (groupNames.empty()) continue;
+
+        // Per-entry PartOpacity evidence: entry → {partId → extreme (0 or 1)}
+        // Collect across all entries of all toggle groups referencing the VarFloat,
+        // split by the entry's condition value (its Type=1 equal) when present.
+        struct EntryEvidence {
+            float condValue;
+            std::map<std::string, float> partExtremes;  // partId → min/max Opacity reached
+        };
+        std::vector<EntryEvidence> entries;
+
+        for (const auto& groupName : groupNames) {
+            auto motionIt = _modelConfig.motions.find(groupName);
+            if (motionIt == _modelConfig.motions.end()) continue;
+            for (const auto& meta : motionIt->second) {
+                float condValue = -1.0F;
+                for (const auto& vf : meta.var_floats) {
+                    if (vf.type == 1 && vf.has_equal) { condValue = vf.equal; break; }
+                }
+                if (meta.file.empty()) continue;
+                std::string motionPath = modelDir + meta.file;
+                csmSizeInt fileSize = 0;
+                csmByte* buf = LAppPal::LoadFileAsBytes(motionPath.c_str(), &fileSize);
+                if (buf == nullptr || fileSize == 0) continue;
+                std::string jsonStr(reinterpret_cast<char*>(buf), fileSize);
+                LAppPal::ReleaseBytes(buf);
+
+                try {
+                    nlohmann::json mj = nlohmann::json::parse(jsonStr);
+                    if (!mj.contains("Curves") || !mj["Curves"].is_array()) continue;
+                    EntryEvidence ev;
+                    ev.condValue = condValue;
+                    for (const auto& curve : mj["Curves"]) {
+                        if (!curve.contains("Target") || !curve.contains("Id") ||
+                            !curve.contains("Segments")) continue;
+                        std::string target = curve["Target"].get<std::string>();
+                        if (target != "Part" && target != "PartOpacity") continue;
+                        std::string partId = curve["Id"].get<std::string>();
+                        if (IsGenericPartId(partId)) continue;
+                        // Min/max of the curve's values
+                        float mn = 1.0F, mx = 0.0F;
+                        bool has = false;
+                        for (const auto& seg : curve["Segments"]) {
+                            if (seg.is_number()) {
+                                float v = seg.get<float>();
+                                mn = std::min(mn, v);
+                                mx = std::max(mx, v);
+                                has = true;
+                            }
+                        }
+                        if (!has) continue;
+                        auto it = ev.partExtremes.find(partId);
+                        if (it == ev.partExtremes.end()) {
+                            ev.partExtremes[partId] = mx;  // placeholder, refined below
+                            ev.partExtremes[partId + "\x01min"] = mn;
+                        } else {
+                            it->second = std::max(it->second, mx);
+                            ev.partExtremes[partId + "\x01min"] =
+                                std::min(ev.partExtremes[partId + "\x01min"], mn);
+                        }
+                    }
+                    if (!ev.partExtremes.empty()) entries.push_back(std::move(ev));
+                } catch (...) {
+                    // skip malformed
+                }
+            }
+        }
+        if (entries.size() < 2) continue;
+
+        // A Part qualifies when it is driven to ~0 in one entry and ~1 in another
+        // (visibility toggle evidence), and no entry leaves it untouched.
+        std::map<std::string, int> zeroVotes, oneVotes;
+        for (const auto& ev : entries) {
+            for (const auto& pe : ev.partExtremes) {
+                if (!pe.first.empty() && pe.first.back() == '\x01') continue;  // min marker
+            }
+            for (auto it = ev.partExtremes.begin(); it != ev.partExtremes.end(); ++it) {
+                if (!it->first.empty() && it->first.back() == '\x01') continue;
+                auto minIt = ev.partExtremes.find(it->first + "\x01min");
+                float mx = it->second;
+                float mn = (minIt != ev.partExtremes.end()) ? minIt->second : mx;
+                if (mx <= 0.05F) zeroVotes[it->first]++;
+                if (mn >= 0.95F) oneVotes[it->first]++;
+            }
+        }
+
+        std::vector<std::string> evidenceParts;
+        for (const auto& zv : zeroVotes) {
+            if (zv.second >= 1 && oneVotes.count(zv.first) && oneVotes[zv.first] >= 1) {
+                evidenceParts.push_back(zv.first);
+            }
+        }
+        if (evidenceParts.size() != 1) {
+            LAppPal::PrintLogLn("[APP]Disambiguate: [%s] evidence inconclusive (%zu candidates), remains unbound",
+                vfName.c_str(), evidenceParts.size());
+            continue;
+        }
+
+        // Exactly one complementary Part — bind it
+        std::string suffix = vfName;
+        size_t dot = vfName.rfind('.');
+        if (dot != std::string::npos) suffix = vfName.substr(dot + 1);
+
+        GroupConfig g;
+        g.name = suffix;
+        g.text = suffix;
+        g.target = "ParamAuto_" + suffix;
+        g.var_float = vfName;
+        g.ids.push_back(evidenceParts[0]);
+
+        std::set<float> assignValues;
+        for (const auto& kv : _modelConfig.motions) {
+            for (const auto& meta : kv.second) {
+                for (const auto& vf : meta.var_floats) {
+                    if (vf.name == vfName && vf.type == 2 && vf.has_assign) {
+                        assignValues.insert(vf.assign);
+                    }
+                }
+            }
+        }
+        if (assignValues.size() > 2) {
+            for (float v : assignValues) g.values.push_back(v);
+        } else {
+            g.values = {0.0F, 1.0F};
+        }
+        if (g.values.size() == 2 && g.values[0] == 0.0F && g.values[1] == 1.0F) {
+            _modelConfig.var_floats[vfName] = 1.0F;
+            g.currentIndex = 1;
+        } else {
+            g.currentIndex = 0;
+        }
+
+        _modelConfig.groups.push_back(g);
+        resolved++;
+        LAppPal::PrintLogLn("[APP]Disambiguate: [%s] → [%s] (complementary PartOpacity evidence)",
+            vfName.c_str(), evidenceParts[0].c_str());
+    }
+
+    if (resolved > 0) {
+        BuildVarFloatGroupMap();
+        LAppPal::PrintLogLn("[APP]Disambiguate: resolved %d ambiguous VarFloat(s) via motion evidence", resolved);
+    }
+}
+
 /// Auto-generate GroupConfig entries from VarFloat definitions in motion metadata.
 /// Uses a 3-layer inference strategy (aligned with ViewerEX data-driven approach):
 ///   Layer 1: HitAreas → Motion Group → VarFloat chain (most precise)
@@ -2791,60 +2968,18 @@ void LAppLive2DManager::AutoGenerateVarFloatGroups() {
                             (int)allPartIds.size(), partList.c_str());
     }
 
-    int generated = 0;
-    for (const auto& vfName : vfNames) {
-        // Skip if a group with this var_float already exists
-        bool exists = false;
-        for (const auto& g : _modelConfig.groups) {
-            if (g.var_float == vfName) { exists = true; break; }
-        }
-        if (exists) continue;
-
-        // Check user override map first
-        auto overrideIt = _modelConfig.var_float_part_overrides.find(vfName);
-        if (overrideIt != _modelConfig.var_float_part_overrides.end() && !overrideIt->second.empty()) {
-            std::string suffix = vfName;
-            size_t dot = vfName.rfind('.');
-            if (dot != std::string::npos) suffix = vfName.substr(dot + 1);
-
-            GroupConfig g;
-            g.name = suffix;
-            g.text = suffix;
-            g.target = "ParamAuto_" + suffix;
-            g.var_float = vfName;
-            g.ids = overrideIt->second;
-            g.values = {0.0F, 1.0F};
-
-            // Initialize VarFloat=1.0 to match the part's default visible state.
-            // Parts are visible by default; first click should toggle to hidden.
-            _modelConfig.var_floats[vfName] = 1.0F;
-            g.currentIndex = 1;
-
-            _modelConfig.groups.push_back(g);
-            generated++;
-            LAppPal::PrintLogLn("[APP]AutoVarFloatGroups: override [%s] → [%s]",
-                vfName.c_str(), [&]() {
-                    std::string s;
-                    for (const auto& pid : overrideIt->second) {
-                        if (!s.empty()) s += ", ";
-                        s += pid;
-                    }
-                    return s;
-                }().c_str());
-            continue;
-        }
-
-        // Extract suffix: "1.pidai" → "pidai"
+    auto toLowerFn = [](std::string s) {
+        for (auto& c : s) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+        return s;
+    };
+    auto vfSuffix = [](const std::string& vfName) {
         std::string suffix = vfName;
         size_t dot = vfName.rfind('.');
         if (dot != std::string::npos) suffix = vfName.substr(dot + 1);
-
-        // Try to match suffix to Part ID(s) using generic name similarity.
-        // Returns ALL matching Parts (e.g., "pidai" → PD, DW_PD_JB, DW_PD_KU, DW_PD_NEIKU).
-        std::vector<std::string> matchedPartIds = MatchVarFloatSuffixToPartIds(suffix, allPartIds);
-        if (matchedPartIds.empty()) continue;
-
-        // Determine values array from VarFloat assignments in motion entries
+        return suffix;
+    };
+    // Collect the assign values defined for a VarFloat (for the group's values[])
+    auto collectAssignValues = [this](const std::string& vfName) {
         std::set<float> assignValues;
         for (const auto& kv : _modelConfig.motions) {
             for (const auto& meta : kv.second) {
@@ -2855,41 +2990,118 @@ void LAppLive2DManager::AutoGenerateVarFloatGroups() {
                 }
             }
         }
+        return assignValues;
+    };
+    auto createGroup = [this](const std::string& vfName, const std::vector<std::string>& ids,
+                              const std::set<float>& assignValues) {
+        std::string suffix = vfName;
+        size_t dot = vfName.rfind('.');
+        if (dot != std::string::npos) suffix = vfName.substr(dot + 1);
 
         GroupConfig g;
         g.name = suffix;
         g.text = suffix;
         g.target = "ParamAuto_" + suffix;
-        g.ids = matchedPartIds;
         g.var_float = vfName;
-
+        g.ids = ids;
         if (assignValues.size() > 2) {
             for (float v : assignValues) g.values.push_back(v);
         } else {
             g.values = {0.0F, 1.0F};
         }
-
-        // Initialize VarFloat=1.0 for binary toggles to match the part's default
-        // visible state. Parts are visible by default; first click toggles to hidden.
         if (g.values.size() == 2 && g.values[0] == 0.0F && g.values[1] == 1.0F) {
             _modelConfig.var_floats[vfName] = 1.0F;
             g.currentIndex = 1;
         } else {
             g.currentIndex = 0;
         }
-
         _modelConfig.groups.push_back(g);
-        generated++;
-        LAppPal::PrintLogLn("[APP]AutoVarFloatGroups: [%s] → %d Part(s): [%s]",
-            vfName.c_str(), (int)matchedPartIds.size(), [&]() {
-                std::string s;
-                for (const auto& pid : matchedPartIds) {
-                    if (!s.empty()) s += ", ";
-                    s += pid;
-                }
-                return s;
-            }().c_str());
+    };
+
+    // Parts already claimed by a group — a Part may belong to only ONE auto
+    // group. Previously each VarFloat matched independently, so e.g. suffix
+    // "bj" (背景) and "bjgc" (背景跟宠) could BOTH claim the shared Part and
+    // the two components ended up cross-bound (toggling one moved the other).
+    int generated = 0;
+    std::set<std::string> claimedParts;
+
+    // Pending VarFloats (no existing group, no override)
+    std::vector<std::string> pending;
+    for (const auto& vfName : vfNames) {
+        bool exists = false;
+        for (const auto& g : _modelConfig.groups) {
+            if (g.var_float == vfName) { exists = true; break; }
+        }
+        if (exists) continue;
+        auto overrideIt = _modelConfig.var_float_part_overrides.find(vfName);
+        if (overrideIt != _modelConfig.var_float_part_overrides.end() && !overrideIt->second.empty()) {
+            // User override: explicit Part list — highest trust, claim first
+            createGroup(vfName, overrideIt->second, {0.0F, 1.0F});
+            for (const auto& pid : overrideIt->second) claimedParts.insert(pid);
+            generated++;
+            LAppPal::PrintLogLn("[APP]AutoVarFloatGroups: override [%s] → %d Part(s)",
+                vfName.c_str(), (int)overrideIt->second.size());
+        } else {
+            pending.push_back(vfName);
+        }
     }
+
+    // Pass 1 — EXACT matches claim their Part globally, before any fuzzy match.
+    // Exact (case-insensitive) suffix == PartID is unambiguous and must not be
+    // stolen by another VarFloat's looser strategy.
+    std::vector<std::string> remaining;
+    for (const auto& vfName : pending) {
+        std::string suffixLower = toLowerFn(vfSuffix(vfName));
+        std::string exactPart;
+        for (const auto& pid : allPartIds) {
+            if (claimedParts.count(pid)) continue;
+            if (toLowerFn(pid) == suffixLower) { exactPart = pid; break; }
+        }
+        if (!exactPart.empty()) {
+            createGroup(vfName, {exactPart}, collectAssignValues(vfName));
+            claimedParts.insert(exactPart);
+            generated++;
+            LAppPal::PrintLogLn("[APP]AutoVarFloatGroups: exact [%s] → [%s]",
+                vfName.c_str(), exactPart.c_str());
+        } else {
+            remaining.push_back(vfName);
+        }
+    }
+
+    // Pass 2 — fuzzy matches, LONGEST suffix first (more specific wins), only
+    // against still-unclaimed Parts, accepted only when unambiguous. An
+    // ambiguous or competing match is DROPPED for now (collected for the
+    // evidence-based disambiguation pass below) — binding nothing is better
+    // than binding the wrong component.
+    std::stable_sort(remaining.begin(), remaining.end(),
+        [&vfSuffix](const std::string& a, const std::string& b) {
+            return vfSuffix(a).size() > vfSuffix(b).size();
+        });
+    std::vector<std::string> droppedAmbiguous;
+    for (const auto& vfName : remaining) {
+        std::vector<std::string> unclaimed;
+        for (const auto& pid : allPartIds) {
+            if (!claimedParts.count(pid)) unclaimed.push_back(pid);
+        }
+        auto matched = MatchVarFloatSuffixToPartIds(vfSuffix(vfName), unclaimed);
+        if (matched.empty()) continue;
+        if (matched.size() > 1) {
+            LAppPal::PrintLogLn("[APP]AutoVarFloatGroups: DROP ambiguous [%s] → %d candidate Parts (unresolved)",
+                vfName.c_str(), (int)matched.size());
+            droppedAmbiguous.push_back(vfName);
+            continue;
+        }
+        createGroup(vfName, matched, collectAssignValues(vfName));
+        claimedParts.insert(matched[0]);
+        generated++;
+        LAppPal::PrintLogLn("[APP]AutoVarFloatGroups: fuzzy-unique [%s] → [%s]",
+            vfName.c_str(), matched[0].c_str());
+    }
+
+    // Pass 3 — evidence-driven disambiguation: for toggle VarFloats dropped in
+    // pass 2, read the toggle motions' PartOpacity curves and bind when exactly
+    // one Part shows the complementary 0/1 visibility pattern.
+    DisambiguateByMotionEvidence(droppedAmbiguous);
 
     LAppPal::PrintLogLn("[APP]AutoVarFloatGroups: suffix matching: %d VarFloats, %d Parts available, %d groups generated",
                         (int)vfNames.size(), (int)allPartIds.size(), generated);
@@ -3026,22 +3238,32 @@ void LAppLive2DManager::AutoPopulateHitAreaParams() {
             for (auto& g : _modelConfig.groups) {
                 if (g.target.substr(0, 10) != "ParamAuto_") continue;
                 std::string partLower = toLower(g.ids[0]);
+                // Pass 1: exact suffix == PartID — unambiguous, always safe
+                std::string exactVf;
+                std::vector<std::string> fuzzyVfs;
                 for (const auto& vfName : vfNames) {
                     std::string suffix = vfName;
                     size_t d = vfName.rfind('.');
                     if (d != std::string::npos) suffix = vfName.substr(d + 1);
-                    std::string suffixLower = toLower(suffix);
-                    // Direct match: "kuzi" ↔ "KuZi"
-                    if (suffixLower == partLower) {
-                        g.var_float = vfName;
+                    if (toLower(suffix) == partLower) {
+                        exactVf = vfName;
                         break;
                     }
-                    // Generic substring/abbreviation match
                     auto matched = MatchVarFloatSuffixToPartIds(suffix, {g.ids[0]});
                     if (!matched.empty() && matched[0] == g.ids[0]) {
-                        g.var_float = vfName;
-                        break;
+                        fuzzyVfs.push_back(vfName);
                     }
+                }
+                if (!exactVf.empty()) {
+                    g.var_float = exactVf;
+                } else if (fuzzyVfs.size() == 1) {
+                    // Unique fuzzy match only — several candidates means the
+                    // naming is ambiguous (e.g. 跟宠/背景 shared suffixes) and
+                    // guessing cross-binds components.
+                    g.var_float = fuzzyVfs[0];
+                } else if (fuzzyVfs.size() > 1) {
+                    LAppPal::PrintLogLn("[APP]AutoParam: group [%s] Part [%s]: %d ambiguous VarFloats — left unlinked",
+                        g.name.c_str(), g.ids[0].c_str(), (int)fuzzyVfs.size());
                 }
             }
             LAppPal::PrintLogLn("[APP]AutoParam: auto-generated %d clothing groups", autoGroupIdx);
@@ -3107,12 +3329,44 @@ void LAppLive2DManager::AutoPopulateHitAreaParams() {
         if (!bestGroup && !cfg.motion.empty()) {
             auto it = _modelConfig.motions.find(cfg.motion);
             if (it != _modelConfig.motions.end()) {
+                // The hit area's drawable's parent Part — the strongest signal for
+                // which group this area actually controls
+                std::string hitParentPart;
+                if (cubismModel && drawableCount > 0) {
+                    for (csmInt32 d = 0; d < drawableCount; d++) {
+                        CubismIdHandle drawId = cubismModel->GetDrawableId(d);
+                        if (cfg.id != drawId->GetString().GetRawString()) continue;
+                        csmInt32 pp = cubismModel->GetDrawableParentPartIndex(d);
+                        if (pp >= 0 && pp < partCount) {
+                            hitParentPart = cubismModel->GetPartId(pp)->GetString().GetRawString();
+                        }
+                        break;
+                    }
+                }
+
                 for (const auto& meta : it->second) {
                     for (const auto& vf : meta.var_floats) {
                         if (vf.name.empty()) continue;
                         auto mapIt = _varFloatGroupMap.find(vf.name);
                         if (mapIt != _varFloatGroupMap.end() && !mapIt->second.empty()) {
+                            // Disambiguate multiple groups on one VarFloat:
+                            // 1) group whose Part ids contain the hit area's parent Part
+                            // 2) group whose name/text equals the hit area name
+                            // 3) first entry (previous behaviour, kept as last resort)
                             size_t gIdx = mapIt->second[0];
+                            for (size_t ci : mapIt->second) {
+                                if (ci >= _modelConfig.groups.size()) continue;
+                                const auto& cand = _modelConfig.groups[ci];
+                                if (!hitParentPart.empty() &&
+                                    ContainsIdCaseInsensitive(cand.ids, hitParentPart)) {
+                                    gIdx = ci;
+                                    break;
+                                }
+                                if (cand.name == cfg.name || cand.text == cfg.name) {
+                                    gIdx = ci;
+                                    break;
+                                }
+                            }
                             if (gIdx < _modelConfig.groups.size()) {
                                 bestGroup = &_modelConfig.groups[gIdx];
                             }

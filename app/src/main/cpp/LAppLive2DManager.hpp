@@ -197,6 +197,7 @@ private:
     void InferGroupsFromHitAreas();
     void InferGroupsFromMotionCurves();
     void AutoGenerateVarFloatGroups();
+    void DisambiguateByMotionEvidence(const std::vector<std::string>& droppedVarFloats);
     void AutoPopulateHitAreaParams();
 
     Csm::CubismMatrix44*        _viewMatrix;
