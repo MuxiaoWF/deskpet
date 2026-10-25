@@ -291,17 +291,24 @@ extern "C"
         if (mgr->IsCubism2Model())
         {
             LAppModelCubism2* m = mgr->GetCubism2Model(0);
-            if(m) m->StartMotion(group, index, priority, fadeInTime, fadeOutTime);
+            if(m && m->StartMotion(group, index, priority, fadeInTime, fadeOutTime)) {
+                MotionSequencer::RememberLastPlayed(std::string(group), index);
+                // Notify about motion text and sound if available
+                const MotionMeta* meta = mgr->FindMotionMeta(std::string(group), index);
+                JniBridgeC::NotifyMotionTextAndSound(meta);
+            }
         }
         else
         {
             LAppModel* m = mgr->GetModel(0);
-            if(m) m->StartMotion(group, index, priority, nullptr, nullptr, fadeInTime, fadeOutTime);
+            if(m && m->StartMotion(group, index, priority, nullptr, nullptr, fadeInTime, fadeOutTime)
+                   != Csm::InvalidMotionQueueEntryHandleValue) {
+                MotionSequencer::RememberLastPlayed(std::string(group), index);
+                // Notify about motion text and sound if available
+                const MotionMeta* meta = mgr->FindMotionMeta(std::string(group), index);
+                JniBridgeC::NotifyMotionTextAndSound(meta);
+            }
         }
-
-        // Notify about motion text and sound if available
-        const MotionMeta* meta = mgr->FindMotionMeta(std::string(group), index);
-        JniBridgeC::NotifyMotionTextAndSound(meta);
 
         // VarFloat evaluation is DEFERRED to the MotionSequencer's OnFinishedInternal
         // callback (set up by SetupMotionCallbacks inside StartMotion).
@@ -338,18 +345,23 @@ extern "C"
 
             LAppPal::PrintLogLn("[Toggle] nativeLoadMotionByGroup: calling StartMotion group=[%s] index=%d", group, selected);
             if (mgr->IsCubism2Model()) {
-                // Cubism2: no FinishedMotion callback, keep VarFloat update immediate
-                MotionSequencer::EvaluateVarFloats(groupStr, selected);
                 LAppModelCubism2* m = mgr->GetCubism2Model(0);
-                if (m) m->StartMotion(group, selected, priority);
-                MotionSequencer::SyncVarFloatPartOverrides();
+                if (m && m->StartMotion(group, selected, priority)) {
+                    // Cubism2: evaluate VarFloat only after the play was accepted
+                    MotionSequencer::EvaluateVarFloats(groupStr, selected);
+                    MotionSequencer::SyncVarFloatPartOverrides();
+                    MotionSequencer::RememberLastPlayed(groupStr, selected);
+                }
             } else {
                 // Cubism3: VarFloat evaluation is deferred to MotionSequencer's
                 // OnFinishedInternal callback (set up by SetupMotionCallbacks inside
                 // StartMotion). No user callbacks needed — sequencer handles VarFloat
                 // sync on finish, avoiding conflict with motion's PartOpacity curves.
                 LAppModel* m = mgr->GetModel(0);
-                if (m) m->StartMotion(group, selected, priority);
+                if (m && m->StartMotion(group, selected, priority)
+                        != Csm::InvalidMotionQueueEntryHandleValue) {
+                    MotionSequencer::RememberLastPlayed(groupStr, selected);
+                }
             }
 
             // Notify about motion text and sound
@@ -357,8 +369,30 @@ extern "C"
                 JniBridgeC::NotifyMotionTextAndSound(meta);
             }
         } else {
-            // No VarFloat match — fall back to random
-            if (mgr->IsCubism2Model()) {
+            // No VarFloat match — deterministic alternation fallback. rand()
+            // here made toggle groups (on/off entries) play in a random direction.
+            auto& motionsMap = mgr->GetModelConfig().motions;
+            auto mIt = motionsMap.find(groupStr);
+            int entryCount = (mIt != motionsMap.end())
+                             ? static_cast<int>(mIt->second.size()) : 0;
+            int fallback = MotionSequencer::SelectFallbackIndex(groupStr, entryCount);
+            if (fallback >= 0) {
+                const MotionMeta* fbMeta = mgr->FindMotionMeta(groupStr, fallback);
+                int fbPriority = (fbMeta != nullptr && fbMeta->priority > 0)
+                                 ? fbMeta->priority : 2 /*PriorityNormal*/;
+                if (mgr->IsCubism2Model()) {
+                    LAppModelCubism2* m = mgr->GetCubism2Model(0);
+                    if (m && m->StartMotion(group, fallback, fbPriority)) {
+                        MotionSequencer::RememberLastPlayed(groupStr, fallback);
+                    }
+                } else {
+                    LAppModel* m = mgr->GetModel(0);
+                    if (m && m->StartMotion(group, fallback, fbPriority)
+                            != Csm::InvalidMotionQueueEntryHandleValue) {
+                        MotionSequencer::RememberLastPlayed(groupStr, fallback);
+                    }
+                }
+            } else if (mgr->IsCubism2Model()) {
                 LAppModelCubism2* m = mgr->GetCubism2Model(0);
                 if (m) m->StartRandomMotion(group, 2 /*PriorityNormal*/);
             } else {

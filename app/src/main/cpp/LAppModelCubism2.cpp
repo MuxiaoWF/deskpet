@@ -425,17 +425,17 @@ void LAppModelCubism2::ApplyMotion(csmFloat32 time)
     }
 }
 
-void LAppModelCubism2::StartMotion(const csmChar* group, csmInt32 no, csmInt32 priority, csmFloat32 fadeInTime, csmFloat32 fadeOutTime)
+csmBool LAppModelCubism2::StartMotion(const csmChar* group, csmInt32 no, csmInt32 priority, csmFloat32 fadeInTime, csmFloat32 fadeOutTime)
 {
-    if(!_modelSetting) return;
+    if(!_modelSetting) return false;
 
     if (_currentMotion.playing && priority < LAppDefine::PriorityForce && _currentMotion.priority >= priority)
     {
-        return;
+        return false;
     }
 
     const csmChar* motionFile = _modelSetting->GetMotionFileName(group, no);
-    if(strcmp(motionFile, "") == 0) return;
+    if(strcmp(motionFile, "") == 0) return false;
 
     std::string cacheKey = std::string(group) + "_" + std::to_string(no);
     auto cacheIt = _motionCache.find(cacheKey);
@@ -448,7 +448,7 @@ void LAppModelCubism2::StartMotion(const csmChar* group, csmInt32 no, csmInt32 p
     {
         const csmString motionPath = _modelHomeDir + csmString(motionFile);
         motion = LoadMotionFile(motionPath.GetRawString());
-        if(motion.curves.empty()) return;
+        if(motion.curves.empty()) return false;
         _motionCache[cacheKey] = motion;
     }
 
@@ -500,14 +500,15 @@ void LAppModelCubism2::StartMotion(const csmChar* group, csmInt32 no, csmInt32 p
         }
     }
 
+    return true;
 }
 
-void LAppModelCubism2::StartRandomMotion(const csmChar* group, csmInt32 priority, csmFloat32 fadeInTime, csmFloat32 fadeOutTime)
+csmBool LAppModelCubism2::StartRandomMotion(const csmChar* group, csmInt32 priority, csmFloat32 fadeInTime, csmFloat32 fadeOutTime)
 {
-    if(!_modelSetting) return;
+    if(!_modelSetting) return false;
     const csmInt32 count = _modelSetting->GetMotionCount(group);
-    if(count == 0) return;
-    StartMotion(group, rand() % count, priority, fadeInTime, fadeOutTime);
+    if(count == 0) return false;
+    return StartMotion(group, rand() % count, priority, fadeInTime, fadeOutTime);
 }
 
 void LAppModelCubism2::SetExpression(const csmChar* expressionName)

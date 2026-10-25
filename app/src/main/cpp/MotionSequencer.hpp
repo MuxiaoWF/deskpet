@@ -46,9 +46,20 @@ namespace MotionSequencer {
     void StartMotionFromString(const std::string& motionStr);
 
     /// Select a motion index from a group by evaluating VarFloat conditions.
-    /// Returns the index of the first entry whose Type 0 VarFloats are all satisfied,
-    /// or -1 if no conditions match (caller should fall back to random).
+    /// Returns the index of the first entry whose Type 1 VarFloats are all satisfied,
+    /// or -1 if no conditions match (caller should fall back to SelectFallbackIndex).
     int SelectMotionByVarFloats(const std::string& group);
+
+    /// Remember which entry of a group was last actually played. Feeds the
+    /// deterministic fallback below so toggle groups (on/off entries) always
+    /// alternate even when VarFloat metadata is missing or mismatched.
+    void RememberLastPlayed(const std::string& group, int index);
+    int GetLastPlayedIndex(const std::string& group);
+
+    /// Deterministic fallback when VarFloat selection fails: picks the entry
+    /// AFTER the last played one (strict alternation). Previously callers used
+    /// rand(), which made toggle groups play the on/off direction at random.
+    int SelectFallbackIndex(const std::string& group, int entryCount);
 
     /// Check if a motion group is a toggle group (has entries with both Type=1 condition
     /// and Type=2 assign VarFloats in the same entry). Detects toggle structure regardless

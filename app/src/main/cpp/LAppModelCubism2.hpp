@@ -75,8 +75,11 @@ public:
     void Update(Csm::csmFloat32 deltaTimeSeconds);
     void Draw(Csm::CubismMatrix44& matrix);
 
-    void StartMotion(const Csm::csmChar* group, Csm::csmInt32 no, Csm::csmInt32 priority, Csm::csmFloat32 fadeInTime = -1.0F, Csm::csmFloat32 fadeOutTime = -1.0F);
-    void StartRandomMotion(const Csm::csmChar* group, Csm::csmInt32 priority, Csm::csmFloat32 fadeInTime = -1.0F, Csm::csmFloat32 fadeOutTime = -1.0F);
+    /// Start a motion. Returns true when the motion was actually accepted
+    /// (priority gate passed and motion data loaded) — callers use this to
+    /// decide whether VarFloat state may be updated.
+    Csm::csmBool StartMotion(const Csm::csmChar* group, Csm::csmInt32 no, Csm::csmInt32 priority, Csm::csmFloat32 fadeInTime = -1.0F, Csm::csmFloat32 fadeOutTime = -1.0F);
+    Csm::csmBool StartRandomMotion(const Csm::csmChar* group, Csm::csmInt32 priority, Csm::csmFloat32 fadeInTime = -1.0F, Csm::csmFloat32 fadeOutTime = -1.0F);
     void SetExpression(const Csm::csmChar* expressionName);
     void SetRandomExpression();
     /// Restore the previous expression (borrowed from Live2DViewer)

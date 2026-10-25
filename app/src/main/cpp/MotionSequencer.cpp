@@ -924,6 +924,29 @@ int SelectMotionByVarFloats(const std::string& group)
     return -1;
 }
 
+// --- Deterministic fallback bookkeeping (toggle alternation) ---
+static std::map<std::string, int>& LastPlayedMap() {
+    static std::map<std::string, int> s_lastPlayed;
+    return s_lastPlayed;
+}
+
+void RememberLastPlayed(const std::string& group, int index) {
+    if (index >= 0) LastPlayedMap()[group] = index;
+}
+
+int GetLastPlayedIndex(const std::string& group) {
+    auto it = LastPlayedMap().find(group);
+    return (it != LastPlayedMap().end()) ? it->second : -1;
+}
+
+int SelectFallbackIndex(const std::string& group, int entryCount) {
+    if (entryCount <= 0) return -1;
+    // Strict alternation: next entry after the last one actually played.
+    // rand() here used to make on/off toggle entries play in a random
+    // direction — the classic "wrong animation after selecting" symptom.
+    return (GetLastPlayedIndex(group) + 1) % entryCount;
+}
+
 void StartMotionFromString(const std::string& motionStr)
 {
     std::string group;
@@ -967,8 +990,10 @@ void StartMotionFromString(const std::string& motionStr)
         LAppModelCubism2* m = mgr->GetCubism2Model(static_cast<csmUint32>(slot));
         if (m) {
             if (index >= 0) {
-                m->StartMotion(group.c_str(), index, priority);
-                JniBridgeC::NotifyMotionTextAndSound(chainMeta);
+                if (m->StartMotion(group.c_str(), index, priority)) {
+                    MotionSequencer::RememberLastPlayed(group, index);
+                    JniBridgeC::NotifyMotionTextAndSound(chainMeta);
+                }
             } else {
                 m->StartRandomMotion(group.c_str(), priority);
             }
@@ -977,8 +1002,12 @@ void StartMotionFromString(const std::string& motionStr)
         LAppModel* m = mgr->GetModel(static_cast<csmUint32>(slot));
         if (m) {
             if (index >= 0) {
-                m->StartMotion(group.c_str(), index, priority);
-                JniBridgeC::NotifyMotionTextAndSound(chainMeta);
+                Csm::CubismMotionQueueEntryHandle h =
+                    m->StartMotion(group.c_str(), index, priority);
+                if (h != Csm::InvalidMotionQueueEntryHandleValue) {
+                    MotionSequencer::RememberLastPlayed(group, index);
+                    JniBridgeC::NotifyMotionTextAndSound(chainMeta);
+                }
             } else {
                 m->StartRandomMotion(group.c_str(), priority);
             }
@@ -989,6 +1018,7 @@ void StartMotionFromString(const std::string& motionStr)
 void ResetChainState() {
     s_chainDepth = 0;
     s_chainRoot.clear();
+    LastPlayedMap().clear();  // stale toggle state must not leak across model loads
 }
 
 } // namespace MotionSequencer

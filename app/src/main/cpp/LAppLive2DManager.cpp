@@ -147,34 +147,42 @@ namespace {
                 for (int i = 0; i < (int)it->second.size(); i++) {
                     if (it->second[i].file == fileName) {
                         int resolvedPriority = ResolveMotionPriority(mgr, groupName, i, priority);
-                        model->StartMotion(groupName.c_str(), i, resolvedPriority, onFinished, onBegan);
-                        const MotionMeta* meta = mgr->FindMotionMeta(groupName, i);
-                        JniBridgeC::NotifyMotionTextAndSound(meta);
+                        CubismMotionQueueEntryHandle h =
+                            model->StartMotion(groupName.c_str(), i, resolvedPriority, onFinished, onBegan);
+                        if (h != InvalidMotionQueueEntryHandleValue) {
+                            MotionSequencer::RememberLastPlayed(groupName, i);
+                            const MotionMeta* meta = mgr->FindMotionMeta(groupName, i);
+                            JniBridgeC::NotifyMotionTextAndSound(meta);
+                        }
                         return;
                     }
                 }
             }
-            // File not found — fall through to play random from group
+            // File not found — fall through to play from group
             groupStr = groupName;
             group = groupStr.c_str();
         }
 
         int selected = MotionSequencer::SelectMotionByVarFloats(group);
-        int resolvedPriority = ResolveMotionPriority(mgr, group, selected, priority);
-        if (selected >= 0) {
-            const MotionMeta* meta = mgr->FindMotionMeta(group, selected);
-            model->StartMotion(group, selected, resolvedPriority, onFinished, onBegan);
-            JniBridgeC::NotifyMotionTextAndSound(meta);
-        } else {
-            // Random fallback: pick a random index, start motion, and trigger sound.
+        if (selected < 0) {
+            // Deterministic alternation fallback — rand() here used to pick the
+            // on/off direction of toggle groups at random.
             auto it = mgr->GetModelConfig().motions.find(group);
             int motionCount = (it != mgr->GetModelConfig().motions.end())
                               ? static_cast<int>(it->second.size()) : 0;
-            if (motionCount > 0) {
-                int randomIdx = rand() % motionCount;
-                const MotionMeta* meta = mgr->FindMotionMeta(group, randomIdx);
-                model->StartMotion(group, randomIdx, resolvedPriority, onFinished, onBegan);
+            selected = MotionSequencer::SelectFallbackIndex(group, motionCount);
+        }
+        int resolvedPriority = ResolveMotionPriority(mgr, group, selected, priority);
+        if (selected >= 0) {
+            const MotionMeta* meta = mgr->FindMotionMeta(group, selected);
+            CubismMotionQueueEntryHandle h =
+                model->StartMotion(group, selected, resolvedPriority, onFinished, onBegan);
+            if (h != InvalidMotionQueueEntryHandleValue) {
+                MotionSequencer::RememberLastPlayed(group, selected);
                 JniBridgeC::NotifyMotionTextAndSound(meta);
+            } else {
+                LAppPal::PrintLogLn("[Motion] StartMotion rejected (priority) group=[%s] idx=%d — state unchanged",
+                                    group, selected);
             }
         }
     }
@@ -193,41 +201,45 @@ namespace {
                 for (int i = 0; i < (int)it->second.size(); i++) {
                     if (it->second[i].file == fileName) {
                         int resolvedPriority = ResolveMotionPriority(mgr, groupName, i, priority);
-                        // Cubism2: no FinishedMotion callback, keep VarFloat update immediate
-                        MotionSequencer::EvaluateVarFloats(groupName, i);
-                        model->StartMotion(groupName.c_str(), i, resolvedPriority);
-                        MotionSequencer::SyncVarFloatPartOverrides();
-                        const MotionMeta* meta = mgr->FindMotionMeta(groupName, i);
-                        JniBridgeC::NotifyMotionTextAndSound(meta);
+                        // Cubism2: evaluate VarFloat only after the motion was
+                        // actually accepted — evaluating first flipped the toggle
+                        // state even when the priority gate rejected the play.
+                        if (model->StartMotion(groupName.c_str(), i, resolvedPriority)) {
+                            MotionSequencer::EvaluateVarFloats(groupName, i);
+                            MotionSequencer::SyncVarFloatPartOverrides();
+                            MotionSequencer::RememberLastPlayed(groupName, i);
+                            const MotionMeta* meta = mgr->FindMotionMeta(groupName, i);
+                            JniBridgeC::NotifyMotionTextAndSound(meta);
+                        }
                         return;
                     }
                 }
             }
-            // File not found — fall through to play random from group
+            // File not found — fall through to play from group
             groupStr = groupName;
             group = groupStr.c_str();
         }
 
         int selected = MotionSequencer::SelectMotionByVarFloats(group);
-        int resolvedPriority = ResolveMotionPriority(mgr, group, selected, priority);
-        if (selected >= 0) {
-            // Cubism2: no FinishedMotion callback, keep VarFloat update immediate
-            MotionSequencer::EvaluateVarFloats(group, selected);
-            model->StartMotion(group, selected, resolvedPriority);
-            MotionSequencer::SyncVarFloatPartOverrides();
-            const MotionMeta* meta = mgr->FindMotionMeta(group, selected);
-            JniBridgeC::NotifyMotionTextAndSound(meta);
-        } else {
+        if (selected < 0) {
+            // Deterministic alternation fallback (was rand())
             auto it = mgr->GetModelConfig().motions.find(group);
             int motionCount = (it != mgr->GetModelConfig().motions.end())
                               ? static_cast<int>(it->second.size()) : 0;
-            if (motionCount > 0) {
-                int randomIdx = rand() % motionCount;
-                MotionSequencer::EvaluateVarFloats(group, randomIdx);
-                model->StartMotion(group, randomIdx, resolvedPriority);
+            selected = MotionSequencer::SelectFallbackIndex(group, motionCount);
+        }
+        int resolvedPriority = ResolveMotionPriority(mgr, group, selected, priority);
+        if (selected >= 0) {
+            if (model->StartMotion(group, selected, resolvedPriority)) {
+                // Cubism2: no FinishedMotion callback, keep VarFloat update immediate
+                MotionSequencer::EvaluateVarFloats(group, selected);
                 MotionSequencer::SyncVarFloatPartOverrides();
-                const MotionMeta* meta = mgr->FindMotionMeta(group, randomIdx);
+                MotionSequencer::RememberLastPlayed(group, selected);
+                const MotionMeta* meta = mgr->FindMotionMeta(group, selected);
                 JniBridgeC::NotifyMotionTextAndSound(meta);
+            } else {
+                LAppPal::PrintLogLn("[Motion] StartMotion rejected (priority, C2) group=[%s] idx=%d — state unchanged",
+                                    group, selected);
             }
         }
     }
@@ -241,7 +253,9 @@ namespace {
         const csmInt32 count = model->GetModelSetting()->GetMotionCount(group.c_str());
         if (count <= 0) return;
         const csmInt32 no = rand() % count;
-        model->StartMotion(group.c_str(), no, priority);
+        CubismMotionQueueEntryHandle h = model->StartMotion(group.c_str(), no, priority);
+        if (h == InvalidMotionQueueEntryHandleValue) return;
+        MotionSequencer::RememberLastPlayed(group, no);
         JniBridgeC::NotifyMotionTextAndSound(mgr->FindMotionMeta(group, no));
     }
 
@@ -251,7 +265,8 @@ namespace {
         const csmInt32 count = model->GetModelSetting()->GetMotionCount(group.c_str());
         if (count <= 0) return;
         const csmInt32 no = rand() % count;
-        model->StartMotion(group.c_str(), no, priority);
+        if (!model->StartMotion(group.c_str(), no, priority)) return;
+        MotionSequencer::RememberLastPlayed(group, no);
         JniBridgeC::NotifyMotionTextAndSound(mgr->FindMotionMeta(group, no));
     }
 
@@ -1876,11 +1891,36 @@ void LAppLive2DManager::LoadModelFromPath(const char *modelPath) {
                         _modelConfig.motions[pair.first] = std::move(pair.second);
                         newGroups++;
                     } else if (pair.second.size() == it->second.size()) {
-                        // Same group, same entry count — merge VarFloats by index
+                        // Same group, same entry count — merge VarFloats.
+                        // Match by motion FILE first: merging by index when the two
+                        // lists are ordered differently attaches conditions to the
+                        // wrong entries and breaks on/off toggle selection.
+                        bool filesAligned = true;
                         for (size_t i = 0; i < pair.second.size(); i++) {
-                            if (!pair.second[i].var_floats.empty() && it->second[i].var_floats.empty()) {
-                                it->second[i].var_floats = std::move(pair.second[i].var_floats);
-                                vfUpdated++;
+                            if (!pair.second[i].file.empty() && !it->second[i].file.empty()
+                                && pair.second[i].file != it->second[i].file) {
+                                filesAligned = false;
+                                break;
+                            }
+                        }
+                        if (filesAligned) {
+                            for (size_t i = 0; i < pair.second.size(); i++) {
+                                if (!pair.second[i].var_floats.empty() && it->second[i].var_floats.empty()) {
+                                    it->second[i].var_floats = std::move(pair.second[i].var_floats);
+                                    vfUpdated++;
+                                }
+                            }
+                        } else {
+                            for (auto& src : pair.second) {
+                                if (src.var_floats.empty()) continue;
+                                for (auto& dst : it->second) {
+                                    if (!src.file.empty() && src.file == dst.file
+                                        && dst.var_floats.empty()) {
+                                        dst.var_floats = std::move(src.var_floats);
+                                        vfUpdated++;
+                                        break;
+                                    }
+                                }
                             }
                         }
                     } else {
@@ -1969,9 +2009,33 @@ void LAppLive2DManager::LoadModelAt(const char *modelPath, int slot) {
                             if (it == _modelConfig.motions.end()) {
                                 _modelConfig.motions[pair.first] = std::move(pair.second);
                             } else if (pair.second.size() == it->second.size()) {
+                                // Match by motion FILE first (see LoadModelFromPath):
+                                // index-based merging mis-attaches VarFloats when the
+                                // two lists share size but not ordering.
+                                bool filesAligned = true;
                                 for (size_t i = 0; i < pair.second.size(); i++) {
-                                    if (!pair.second[i].var_floats.empty() && it->second[i].var_floats.empty()) {
-                                        it->second[i].var_floats = std::move(pair.second[i].var_floats);
+                                    if (!pair.second[i].file.empty() && !it->second[i].file.empty()
+                                        && pair.second[i].file != it->second[i].file) {
+                                        filesAligned = false;
+                                        break;
+                                    }
+                                }
+                                if (filesAligned) {
+                                    for (size_t i = 0; i < pair.second.size(); i++) {
+                                        if (!pair.second[i].var_floats.empty() && it->second[i].var_floats.empty()) {
+                                            it->second[i].var_floats = std::move(pair.second[i].var_floats);
+                                        }
+                                    }
+                                } else {
+                                    for (auto& src : pair.second) {
+                                        if (src.var_floats.empty()) continue;
+                                        for (auto& dst : it->second) {
+                                            if (!src.file.empty() && src.file == dst.file
+                                                && dst.var_floats.empty()) {
+                                                dst.var_floats = std::move(src.var_floats);
+                                                break;
+                                            }
+                                        }
                                     }
                                 }
                             } else {
