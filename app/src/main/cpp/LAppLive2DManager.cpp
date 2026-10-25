@@ -14,6 +14,7 @@
 #include "LAppModel.hpp"
 #include "LAppModelCubism2.hpp"
 #include "MotionSequencer.hpp"
+#include "MotionGroupUtils.hpp"
 #include "TriangleHitTest.hpp"
 #include "LAppView.hpp"
 #include "third_party/nlohmann/json.hpp"
@@ -245,6 +246,17 @@ namespace {
             LAppModelCubism2* m = mgr->GetCubism2Model(i);
             if (m) m->StartRandomMotion(group, priority);
         }
+    }
+
+    /// Start the looping idle motion on a Cubism 3/4/5 model.
+    /// The idle layer runs on a dedicated manager and loops internally, so a
+    /// single call is enough for the model's lifetime.
+    void StartIdleMotionFor(LAppModel* model) {
+        if (model == nullptr || model->GetModel() == nullptr) return;
+        csmString idleGroup = model->GetIdleMotionGroup();
+        if (idleGroup.GetLength() == 0) return;
+        model->StartIdleMotion(idleGroup.GetRawString(), 0);
+        LAppPal::PrintLogLn("[Motion] Idle started for model: group=[%s]", idleGroup.GetRawString());
     }
 
     /// Test hit area with triangle-level precision and ignore_visibility support.
@@ -720,6 +732,11 @@ void LAppLive2DManager::OnDragWithHitArea(csmFloat32 x, csmFloat32 y) {
         (newHitIndex >= 0 && newHitIndex < static_cast<int>(_hitAreaConfigs.size()))
             ? _hitAreaConfigs[newHitIndex].name : "");
 
+    // Keep gaze/drag follow alive for the whole gesture. Previously OnDrag was
+    // only called while OUTSIDE hit areas, freezing the look-at target whenever
+    // the finger passed over a hit area during a drag.
+    OnDrag(x, y);
+
     if (newHitIndex >= 0) {
         // Inside a hit area
         if (newHitIndex != _currentHitAreaIndex) {
@@ -799,7 +816,6 @@ void LAppLive2DManager::OnDragWithHitArea(csmFloat32 x, csmFloat32 y) {
                 StartMotionOnSelectedModels(exitMtn.c_str());
             }
         }
-        OnDrag(x, y);
         _currentHitAreaIndex = newHitIndex;
     }
 }
@@ -1647,6 +1663,20 @@ void LAppLive2DManager::OnUpdate() {
         model->Update(deltaTime);
     }
 
+    // Phase 1.5: Restart idle for Cubism 2 models. Their motions do not loop —
+    // when nothing is playing, pick a random motion from the (explicit) idle
+    // group so the pet keeps its base animation between interactions.
+    for (csmUint32 i = 0; i < c2Count; i++) {
+        LAppModelCubism2 *model = _modelsCubism2[i];
+        if (model == nullptr || !model->IsInitialized()) continue;
+        if (!model->IsMotionPlaying()) {
+            csmString idleGroup = MotionGroupUtils::FindIdleGroup(model->GetModelSetting(), false);
+            if (idleGroup.GetLength() > 0) {
+                model->StartRandomMotion(idleGroup.GetRawString(), PriorityIdle);
+            }
+        }
+    }
+
     // Phase 2: Draw only selected
     csmUint32 c2Start = 0;
     csmUint32 c2End = c2Count;
@@ -1762,6 +1792,8 @@ void LAppLive2DManager::LoadModelFromPath(const char *modelPath) {
             LAppPal::PrintLogLn("[APP]LoadModel OK (Cubism3+), models=%d render=%dx%d",
                                 (int) _models.GetSize(), (int) _renderWidth, (int) _renderHeight);
             AutoGenerateHitAreas();
+            // Start the looping idle motion so the pet animates right after load
+            StartIdleMotionFor(model);
         } else {
             LAppPal::PrintLogLn("[APP]LoadModel failed, model is null: %s", modelPath);
             delete model;
@@ -1922,6 +1954,8 @@ void LAppLive2DManager::LoadModelAt(const char *modelPath, int slot) {
                 cfg.values.clear();
             }
             AutoPopulateHitAreaParams();
+            // Start the looping idle motion so the new slot animates right away
+            StartIdleMotionFor(model);
 
             LAppPal::PrintLogLn("[APP]LoadModelAt OK slot=%d total=%d", slot,
                                 (int) _models.GetSize());

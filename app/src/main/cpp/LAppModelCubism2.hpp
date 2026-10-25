@@ -111,6 +111,9 @@ public:
 
     bool IsInitialized() const { return _initialized; }
 
+    /// True while a motion is playing (used by the manager to restart idle).
+    bool IsMotionPlaying() const { return _currentMotion.playing; }
+
     /// Get the underlying Cubism 2 moc loader (for direct parameter control).
     Cubism2MocLoader* GetMocLoader() const { return _mocLoader; }
 
