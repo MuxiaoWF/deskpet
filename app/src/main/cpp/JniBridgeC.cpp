@@ -369,13 +369,19 @@ extern "C"
                 JniBridgeC::NotifyMotionTextAndSound(meta);
             }
         } else {
-            // No VarFloat match — deterministic alternation fallback. rand()
-            // here made toggle groups (on/off entries) play in a random direction.
+            // No VarFloat match — toggle groups use deterministic alternation
+            // (rand() made on/off play in a random direction); plain reaction
+            // groups keep random selection for variety.
             auto& motionsMap = mgr->GetModelConfig().motions;
             auto mIt = motionsMap.find(groupStr);
             int entryCount = (mIt != motionsMap.end())
                              ? static_cast<int>(mIt->second.size()) : 0;
-            int fallback = MotionSequencer::SelectFallbackIndex(groupStr, entryCount);
+            int fallback = -1;
+            if (MotionSequencer::IsToggleGroup(groupStr)) {
+                fallback = MotionSequencer::SelectFallbackIndex(groupStr, entryCount);
+            } else if (entryCount > 0) {
+                fallback = rand() % entryCount;
+            }
             if (fallback >= 0) {
                 const MotionMeta* fbMeta = mgr->FindMotionMeta(groupStr, fallback);
                 int fbPriority = (fbMeta != nullptr && fbMeta->priority > 0)

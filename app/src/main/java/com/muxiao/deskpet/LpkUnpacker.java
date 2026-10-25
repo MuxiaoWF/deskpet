@@ -351,6 +351,10 @@ public class LpkUnpacker {
                 entry.put("motion", FileUtils.optStringEither(area, "Motion", "motion"));
                 entry.put("enter_mtn", FileUtils.optStringEither(area, "EnterMtn", "enter_mtn"));
                 entry.put("exit_mtn", FileUtils.optStringEither(area, "ExitMtn", "exit_mtn"));
+                // DownMtn/UpMtn were previously dropped here, so press/release
+                // feedback animations never reached the native layer
+                entry.put("down_mtn", FileUtils.optStringEither(area, "DownMtn", "down_mtn"));
+                entry.put("up_mtn", FileUtils.optStringEither(area, "UpMtn", "up_mtn"));
                 entry.put("enabled", area.optBoolean("enabled", true));
                 entry.put("width", FileUtils.optDoubleEither(area, "Width", "width"));
                 entry.put("height", FileUtils.optDoubleEither(area, "Height", "height"));

@@ -431,7 +431,19 @@ csmBool LAppModelCubism2::StartMotion(const csmChar* group, csmInt32 no, csmInt3
 
     if (_currentMotion.playing && priority < LAppDefine::PriorityForce && _currentMotion.priority >= priority)
     {
-        return false;
+        // Interrupt rule (ViewerEX semantics, mirrors LAppModel::StartMotion):
+        // the priority gate holds only while the running motion is protected —
+        // non-ignorable AND within its 2s guard window. Otherwise a new tap may
+        // crossfade in immediately; previously rapid taps were swallowed for the
+        // whole playback of the running motion.
+        bool protectedMotion = false;
+        const MotionMeta* curMeta = LAppLive2DManager::GetInstance()->FindMotionMeta(
+            _currentMotion.group, _currentMotion.index);
+        if (curMeta && !curMeta->ignorable && _currentMotion.currentTime < 2.0F)
+        {
+            protectedMotion = true;
+        }
+        if (protectedMotion) return false;
     }
 
     const csmChar* motionFile = _modelSetting->GetMotionFileName(group, no);

@@ -752,6 +752,12 @@ CubismMotionQueueEntryHandle LAppModel::StartMotion(const csmChar* group, csmInt
                     maxNonInterruptableDuration);
             }
             _motionManager->SetReservePriority(PriorityNone);
+            // Release the playing-priority slot too. ReserveMotion keeps
+            // _currentPriority until the ENTIRE queue (playback + fade-out) has
+            // drained, so without this the ignorable / forced-interrupt paths
+            // above could never actually start the new motion — rapid taps were
+            // swallowed for the whole animation window.
+            _motionManager->SetCurrentPriority(PriorityNone);
         }
         if (!_motionManager->ReserveMotion(priority))
         {

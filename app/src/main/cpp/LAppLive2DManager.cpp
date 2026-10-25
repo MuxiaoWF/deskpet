@@ -165,12 +165,17 @@ namespace {
 
         int selected = MotionSequencer::SelectMotionByVarFloats(group);
         if (selected < 0) {
-            // Deterministic alternation fallback — rand() here used to pick the
-            // on/off direction of toggle groups at random.
             auto it = mgr->GetModelConfig().motions.find(group);
             int motionCount = (it != mgr->GetModelConfig().motions.end())
                               ? static_cast<int>(it->second.size()) : 0;
-            selected = MotionSequencer::SelectFallbackIndex(group, motionCount);
+            // Toggle groups: deterministic alternation (rand() used to pick the
+            // on/off direction at random). Plain reaction groups keep random —
+            // strict cycling made reactions always play in a fixed order.
+            if (MotionSequencer::IsToggleGroup(group)) {
+                selected = MotionSequencer::SelectFallbackIndex(group, motionCount);
+            } else if (motionCount > 0) {
+                selected = rand() % motionCount;
+            }
         }
         int resolvedPriority = ResolveMotionPriority(mgr, group, selected, priority);
         if (selected >= 0) {
@@ -222,11 +227,15 @@ namespace {
 
         int selected = MotionSequencer::SelectMotionByVarFloats(group);
         if (selected < 0) {
-            // Deterministic alternation fallback (was rand())
             auto it = mgr->GetModelConfig().motions.find(group);
             int motionCount = (it != mgr->GetModelConfig().motions.end())
                               ? static_cast<int>(it->second.size()) : 0;
-            selected = MotionSequencer::SelectFallbackIndex(group, motionCount);
+            // Toggle groups: deterministic alternation; plain reaction groups keep random
+            if (MotionSequencer::IsToggleGroup(group)) {
+                selected = MotionSequencer::SelectFallbackIndex(group, motionCount);
+            } else if (motionCount > 0) {
+                selected = rand() % motionCount;
+            }
         }
         int resolvedPriority = ResolveMotionPriority(mgr, group, selected, priority);
         if (selected >= 0) {
@@ -376,6 +385,21 @@ namespace {
         std::string lower = name;
         for (auto& c : lower) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
         return lower == "head" || lower == "face";
+    }
+
+    /// Match a hit-area config against a model hit area. The model exposes both
+    /// a Name (display label, possibly localized) and an Id (drawable reference
+    /// like "D_REF.HEAD"). The previous check only compared against the Name, so
+    /// configs whose Name was a localized alias never matched and the area fell
+    /// through to the generic tap animation — "hit area not bound to its motion".
+    bool MatchHitAreaConfig(const HitAreaConfig& cfg, const csmChar* areaName, const csmChar* areaId) {
+        if (areaName != nullptr && areaName[0] != '\0') {
+            if (cfg.id == areaName || cfg.name == areaName) return true;
+        }
+        if (areaId != nullptr && areaId[0] != '\0') {
+            if (cfg.id == areaId || cfg.name == areaId) return true;
+        }
+        return false;
     }
 
     /// Sync GroupConfig part overrides when a param value changes.
@@ -603,9 +627,10 @@ void LAppLive2DManager::OnHitAreaBegan(csmFloat32 x, csmFloat32 y) {
         for (csmInt32 h = 0; h < setting->GetHitAreasCount(); h++) {
             const csmChar *areaName = setting->GetHitAreaName(h);
             const CubismIdHandle drawID = setting->GetHitAreaId(h);
+            const csmChar *areaId = drawID ? drawID->GetString().GetRawString() : "";
             for (size_t c = 0; c < _hitAreaConfigs.size(); c++) {
                 if (!_hitAreaConfigs[c].enabled) continue;
-                if (_hitAreaConfigs[c].id == areaName || _hitAreaConfigs[c].name == areaName) {
+                if (MatchHitAreaConfig(_hitAreaConfigs[c], areaName, areaId)) {
                     if (IsHitAreaHit(model, _hitAreaConfigs[c], drawID, hitX, hitY)) {
                         _pressedHitAreaIndex = static_cast<int>(c);
                         std::string downMotion = _hitAreaConfigs[c].downMtn;
@@ -639,7 +664,7 @@ void LAppLive2DManager::OnHitAreaBegan(csmFloat32 x, csmFloat32 y) {
             const csmChar *areaId = drawID ? drawID->GetString().GetRawString() : "";
             for (size_t c = 0; c < _hitAreaConfigs.size(); c++) {
                 if (!_hitAreaConfigs[c].enabled) continue;
-                if (_hitAreaConfigs[c].id == areaName || _hitAreaConfigs[c].name == areaName) {
+                if (MatchHitAreaConfig(_hitAreaConfigs[c], areaName, areaId)) {
                     // Same visibility rules as the Cubism3 IsHitAreaHit path:
                     // toggle/ignore_visibility areas stay tappable when hidden.
                     bool isToggle = !_hitAreaConfigs[c].param.empty() && !_hitAreaConfigs[c].values.empty();
@@ -713,10 +738,11 @@ void LAppLive2DManager::OnDragWithHitArea(csmFloat32 x, csmFloat32 y) {
         for (csmInt32 h = 0; h < setting->GetHitAreasCount(); h++) {
             const csmChar *areaName = setting->GetHitAreaName(h);
             const CubismIdHandle drawID = setting->GetHitAreaId(h);
+            const csmChar *areaId = drawID ? drawID->GetString().GetRawString() : "";
             // Find matching config to check ignore_visibility
             for (size_t c = 0; c < _hitAreaConfigs.size(); c++) {
                 if (!_hitAreaConfigs[c].enabled) continue;
-                if (_hitAreaConfigs[c].id == areaName || _hitAreaConfigs[c].name == areaName) {
+                if (MatchHitAreaConfig(_hitAreaConfigs[c], areaName, areaId)) {
                     if (IsHitAreaHit(model, _hitAreaConfigs[c], drawID, hitX, hitY)) {
                         newHitIndex = static_cast<int>(c);
                         goto done_hit_check;
@@ -748,7 +774,7 @@ void LAppLive2DManager::OnDragWithHitArea(csmFloat32 x, csmFloat32 y) {
                 const csmChar *areaId = drawID ? drawID->GetString().GetRawString() : "";
                 for (size_t c = 0; c < _hitAreaConfigs.size(); c++) {
                     if (!_hitAreaConfigs[c].enabled) continue;
-                    if (_hitAreaConfigs[c].id == areaName || _hitAreaConfigs[c].name == areaName) {
+                    if (MatchHitAreaConfig(_hitAreaConfigs[c], areaName, areaId)) {
                         bool isToggle = !_hitAreaConfigs[c].param.empty() && !_hitAreaConfigs[c].values.empty();
                         bool checkVis = !(_hitAreaConfigs[c].ignore_visibility || isToggle);
                         if (model->HitTest(areaId, areaName, hitX, hitY, checkVis)) {
@@ -858,6 +884,18 @@ void LAppLive2DManager::OnDragWithHitArea(csmFloat32 x, csmFloat32 y) {
 
 void LAppLive2DManager::SetHitAreaConfig(const char *json) {
     ParseHitAreaJson(json);
+
+    // Java calls nativeSetHitAreaConfig AFTER nativeLoadModel, so the
+    // model3.json merge performed inside LoadModelFromPath (AutoGenerateHitAreas)
+    // was just wiped by ParseHitAreaJson's clear(). Re-run the merge so that
+    // Motion/Param/geometry fields missing from the imported config are filled
+    // back in from model3.json — otherwise hit areas partially defined in
+    // config.mlve end up without their animations. Also re-bind param toggles:
+    // AutoPopulateHitAreaParams ran before this rebuild, against the old table.
+    if (!_lastModelPath.empty()) {
+        AutoGenerateHitAreasFromModelJson(_lastModelPath.c_str());
+    }
+    AutoPopulateHitAreaParams();
 }
 
 void LAppLive2DManager::ParseHitAreaJson(const char *jsonStr) {
@@ -1163,7 +1201,9 @@ void LAppLive2DManager::AutoGenerateHitAreasFromModelJson(const char *modelJsonP
 
                 HitAreaConfig *existing = nullptr;
                 for (auto &cfg : _hitAreaConfigs) {
-                    if (cfg.id == config.id || cfg.name == config.name) {
+                    // Same relaxed matching as the tap paths: config.mlve may use
+                    // localized names while model3.json uses the model's own ones
+                    if (MatchHitAreaConfig(cfg, config.name.c_str(), config.id.c_str())) {
                         existing = &cfg;
                         break;
                     }
@@ -1267,12 +1307,13 @@ void LAppLive2DManager::OnTap(csmFloat32 x, csmFloat32 y, bool wasDragging) {
             for (csmInt32 h = 0; h < setting->GetHitAreasCount(); h++) {
                 const csmChar *areaName = setting->GetHitAreaName(h);
                 const CubismIdHandle drawID = setting->GetHitAreaId(h);
+                const csmChar *areaId = drawID ? drawID->GetString().GetRawString() : "";
 
                 HitAreaConfig *matched = nullptr;
                 int matchedIdx = -1;
                 for (size_t ci = 0; ci < _hitAreaConfigs.size(); ci++) {
                     if (!_hitAreaConfigs[ci].enabled) continue;
-                    if (_hitAreaConfigs[ci].id == areaName || _hitAreaConfigs[ci].name == areaName) {
+                    if (MatchHitAreaConfig(_hitAreaConfigs[ci], areaName, areaId)) {
                         matched = &_hitAreaConfigs[ci];
                         matchedIdx = static_cast<int>(ci);
                         break;
@@ -1387,7 +1428,7 @@ void LAppLive2DManager::OnTap(csmFloat32 x, csmFloat32 y, bool wasDragging) {
                     int matchedIdx = -1;
                     for (size_t ci = 0; ci < _hitAreaConfigs.size(); ci++) {
                         if (!_hitAreaConfigs[ci].enabled) continue;
-                        if (_hitAreaConfigs[ci].id == areaName || _hitAreaConfigs[ci].name == areaName) {
+                        if (MatchHitAreaConfig(_hitAreaConfigs[ci], areaName, areaId)) {
                             matched = &_hitAreaConfigs[ci];
                             matchedIdx = static_cast<int>(ci);
                             break;
