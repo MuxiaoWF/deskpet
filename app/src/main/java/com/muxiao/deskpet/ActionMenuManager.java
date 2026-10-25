@@ -398,6 +398,9 @@ public class ActionMenuManager {
             Log.d(TAG, "PopupWindow dismissed");
             popupWindow = null;
             Live2DNativeBridge.nativeSetMenuVisible(false);
+            if (onDismissCallback != null) {
+                onDismissCallback.run();
+            }
         });
         popupWindow.setElevation(dp(context, 4));
 
@@ -427,6 +430,20 @@ public class ActionMenuManager {
             popupWindow.dismiss();
             // popupWindow.dismiss() triggers onDismissListener which calls nativeSetMenuVisible(false)
         }
+    }
+
+    /** True while the menu popup is on screen. */
+    public boolean isShowing() {
+        return popupWindow != null && popupWindow.isShowing();
+    }
+
+    // Invoked when the menu popup is dismissed (any path) — lets the service
+    // clean up gesture state so a stale pending long-press / consumed flag
+    // cannot reopen the menu or mis-handle the next gesture.
+    private Runnable onDismissCallback;
+
+    public void setOnDismissCallback(Runnable callback) {
+        onDismissCallback = callback;
     }
 
     // Stored params for refresh (set by show(), cleared by dismiss)
@@ -1166,7 +1183,7 @@ public class ActionMenuManager {
         showDialog(context, FileUtils.buildBothDisabledWarning(context, () -> {
             Log.d(TAG, "BothDisabled revert: key=[" + key + "] = " + !value);
             toggle.setChecked(!value);
-            prefs.edit().putBoolean(key, !value).commit();
+            prefs.edit().putBoolean(key, !value).apply();
         }));
     }
 

@@ -204,12 +204,22 @@ void LAppDelegate::OnTouchBegan(double x, double y)
 
 void LAppDelegate::OnTouchEnded(double x, double y, bool wasDragging)
 {
+    if (!_captured)
+    {
+        // Orphan end (no matching OnTouchBegan for this gesture). The touch
+        // state (_touchManager coordinates, hit-area tracking) still belongs
+        // to the PREVIOUS gesture — dispatching here re-triggers hit areas
+        // from stale coordinates (e.g. phantom tap when the menu popup
+        // dismisses on an outside tap and the UP re-routes here).
+        LAppPal::PrintLogLn("[Touch] OnTouchEnded ignored: no active touch (orphan event)");
+        return;
+    }
+    _captured = false;
     _mouseX = static_cast<float>(x);
     _mouseY = static_cast<float>(y);
 
     if (_view != nullptr)
     {
-        _captured = false;
         _view->OnTouchesEnded(_mouseX, _mouseY, wasDragging);
     }
 }

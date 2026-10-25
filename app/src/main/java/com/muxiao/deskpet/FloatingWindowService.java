@@ -110,6 +110,10 @@ public class FloatingWindowService extends Service {
     private Runnable pendingTapRunnable;
     private Runnable longPressRunnable;
     private boolean longPressConsumed;
+    // True between ACTION_DOWN and UP/CANCEL. Events outside this window are
+    // orphans (re-routed after popup dismissal) and must be swallowed — they
+    // used to fire phantom taps / reopen the menu against stale state.
+    private boolean touchActive = false;
 
     // Pinch gesture detection
     private float lastPinchDistance = 0;
@@ -223,6 +227,13 @@ public class FloatingWindowService extends Service {
         edgeHideManager = new EdgeHideManager();
         edgeHideManager.setEnabled(prefs.getBoolean("edge_hide_enabled", false));
         edgeHideManager.setVisiblePortion(prefs.getFloat("edge_hide_visible_portion", 0.30f));
+
+        // Menu closed → clean up gesture state so a stale pending long-press or
+        // consumed flag cannot reopen the menu / mis-handle the next gesture.
+        actionMenuManager.setOnDismissCallback(() -> {
+            cancelLongPress();
+            longPressConsumed = false;
+        });
 
         // Sound is now triggered from native side (works for menu, hit area, and auto motions)
         Live2DNativeBridge.setMotionSoundCallback((soundPath, delayMs) ->
@@ -559,6 +570,7 @@ public class FloatingWindowService extends Service {
         // getAction() encodes pointer index in upper bits, breaking ACTION_POINTER_DOWN/UP.
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
+                touchActive = true;
                 touchOffsetX = event.getRawX() - layoutParams.x;
                 touchOffsetY = event.getRawY() - layoutParams.y;
                 isDragging = false;
@@ -576,6 +588,9 @@ public class FloatingWindowService extends Service {
                 return true;
 
             case MotionEvent.ACTION_MOVE:
+                // Orphan move (gesture never began here — e.g. re-routed after
+                // popup dismissal): swallow so it can't drive the model.
+                if (!touchActive) return true;
                 // Pinch detection with 2 fingers
                 if (event.getPointerCount() >= 2) {
                     isPinching = true;
@@ -603,32 +618,38 @@ public class FloatingWindowService extends Service {
                     return true;
                 }
 
-                if (dragEnabled) {
-                    if (!isDragging) {
-                        float dx = event.getRawX() - (layoutParams.x + touchOffsetX);
-                        float dy = event.getRawY() - (layoutParams.y + touchOffsetY);
-                        if (Math.hypot(dx, dy) > DRAG_THRESHOLD) {
+                if (!isDragging) {
+                    float dx = event.getRawX() - (layoutParams.x + touchOffsetX);
+                    float dy = event.getRawY() - (layoutParams.y + touchOffsetY);
+                    if (Math.hypot(dx, dy) > DRAG_THRESHOLD) {
+                        // Movement beyond touch slop means interaction intent
+                        // (model hit-area hold/drag or window drag) — the pending
+                        // long-press must be cancelled regardless of dragEnabled.
+                        // Previously the cancel lived inside the dragEnabled branch,
+                        // so with dragging disabled, hold+move interactions always
+                        // fired the menu at 500ms and killed the native touch.
+                        cancelLongPress();
+                        if (dragEnabled) {
                             isDragging = true;
                             // Screen may have rotated since the last drag —
                             // refresh bounds used for clamping below
                             refreshScreenSize();
-                            cancelLongPress();
-                            cancelPeekHide();
                         }
+                        cancelPeekHide();
                     }
-                    if (isDragging) {
-                        layoutParams.x = (int) (event.getRawX() - touchOffsetX);
-                        layoutParams.y = (int) (event.getRawY() - touchOffsetY);
-                        // Keep at least half the window on screen so the pet
-                        // can't be dragged off-screen and lost (same clamp the
-                        // startup position applies)
-                        int half = layoutParams.width / 2;
-                        layoutParams.x = Math.max(-half,
-                                Math.min(layoutParams.x, screenWidth - half));
-                        layoutParams.y = Math.max(-half,
-                                Math.min(layoutParams.y, screenHeight - half));
-                        windowManager.updateViewLayout(glSurfaceView, layoutParams);
-                    }
+                }
+                if (dragEnabled && isDragging) {
+                    layoutParams.x = (int) (event.getRawX() - touchOffsetX);
+                    layoutParams.y = (int) (event.getRawY() - touchOffsetY);
+                    // Keep at least half the window on screen so the pet
+                    // can't be dragged off-screen and lost (same clamp the
+                    // startup position applies)
+                    int half = layoutParams.width / 2;
+                    layoutParams.x = Math.max(-half,
+                            Math.min(layoutParams.x, screenWidth - half));
+                    layoutParams.y = Math.max(-half,
+                            Math.min(layoutParams.y, screenHeight - half));
+                    windowManager.updateViewLayout(glSurfaceView, layoutParams);
                 }
                 if (!isDragging) {
                     // Before drag threshold: forward to native for model interaction
@@ -651,7 +672,7 @@ public class FloatingWindowService extends Service {
 
             case MotionEvent.ACTION_POINTER_DOWN:
                 // Second finger down: start pinch tracking
-                if (event.getPointerCount() == 2) {
+                if (touchActive && event.getPointerCount() == 2) {
                     lastPinchDistance = getFingerDistance(event);
                     isPinching = true;
                     wasPinching = true;
@@ -662,7 +683,7 @@ public class FloatingWindowService extends Service {
 
             case MotionEvent.ACTION_POINTER_UP:
                 // Finger lifted during multi-touch
-                if (event.getPointerCount() <= 2) {
+                if (touchActive && event.getPointerCount() <= 2) {
                     isPinching = false;
                     lastPinchDistance = 0;
                 }
@@ -670,6 +691,7 @@ public class FloatingWindowService extends Service {
 
             case MotionEvent.ACTION_CANCEL:
                 // System cancelled touch (incoming call, system gesture, etc.)
+                touchActive = false;
                 isPinching = false;
                 wasPinching = false;
                 lastPinchDistance = 0;
@@ -681,6 +703,11 @@ public class FloatingWindowService extends Service {
                 return true;
 
             case MotionEvent.ACTION_UP:
+                // Orphan UP (gesture never began here — e.g. re-routed after the
+                // menu popup dismissed on an outside tap): swallow it so it can't
+                // play a phantom tap against stale native touch coordinates.
+                if (!touchActive) return true;
+                touchActive = false;
                 isPinching = false;
                 lastPinchDistance = 0;
                 cancelLongPress();
@@ -767,6 +794,7 @@ public class FloatingWindowService extends Service {
             longPressRunnable = () -> {
                 longPressRunnable = null;
                 if (isDragging || wasPinching || isPinching) return;
+                if (actionMenuManager.isShowing()) return;
                 longPressConsumed = true;
                 cancelPeekHide();
                 glSurfaceView.queueEvent(() -> {
