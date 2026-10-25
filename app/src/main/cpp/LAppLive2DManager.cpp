@@ -312,9 +312,12 @@ namespace {
         // Use full MVP inverse for all paths — correctly handles mirror, rotation, and aspect ratio.
         const CubismMatrix44& mvp = model->GetLastFrameMVP();
 
-        // Toggle hit areas (param + values) must remain tappable even when their
-        // controlling Part is hidden by VarFloat. Without this, hiding a Part makes
-        // its toggle untappable — a visibility deadlock.
+        // Toggle hit areas (param + values) and ignore_visibility areas skip the
+        // strict triangle-path visibility checks — BUT a component actually hidden
+        // by the costume/VarFloat system (its Part opacity is 0) must not react:
+        // tapping where the component used to be used to fire the area and play a
+        // wrong/default motion entry. Invisible marker meshes (IsVisible == false)
+        // stay clickable: they are pure hit proxies, never "hidden components".
         bool isToggle = !config.param.empty() && !config.values.empty();
         if (config.ignore_visibility || isToggle) {
             // Live AABB from current drawable vertices (follows motion/physics).
@@ -323,6 +326,17 @@ namespace {
             if (cubismModel) {
                 const csmInt32 idx = cubismModel->GetDrawableIndex(drawID);
                 if (idx >= 0) {
+                    if (cubismModel->GetDrawableDynamicFlagIsVisible(idx)) {
+                        // Drawable normally renders — reject when it (or its Part)
+                        // is currently hidden.
+                        if (cubismModel->GetDrawableOpacity(idx) <= 0.0F) return false;
+                        const csmInt32 parentPart = cubismModel->GetDrawableParentPartIndex(idx);
+                        if (parentPart >= 0 && cubismModel->GetPartOpacity(parentPart) <= 0.0F) {
+                            LAppPal::PrintLogLn("[Touch] HitArea [%s] rejected: component hidden (part opacity 0)",
+                                config.name.c_str());
+                            return false;
+                        }
+                    }
                     const csmInt32 vertCount = cubismModel->GetDrawableVertexCount(idx);
                     const csmFloat32* verts = cubismModel->GetDrawableVertices(idx);
                     if (vertCount > 0 && verts) {
@@ -456,7 +470,16 @@ namespace {
             // to force it every frame, hiding parts before the toggle animation finishes.
             // Toggle parameter values are stored in _paramOverrides by OnFinishedInternal
             // after the motion animation completes.
-            if (!skipMotion && !effectiveMotion.empty()) {
+            // Toggle group with unresolvable VarFloat state (metadata missing or
+            // current value matches no condition): do NOT play a fallback entry —
+            // that used to play the group's initial entry regardless of on/off
+            // direction. Cascade the state immediately instead; the toggle still
+            // works, just without its transition animation.
+            bool toggleSelectionValid =
+                !MotionSequencer::IsToggleGroup(effectiveMotion) ||
+                MotionSequencer::SelectMotionByVarFloats(effectiveMotion) >= 0;
+
+            if (!skipMotion && !effectiveMotion.empty() && toggleSelectionValid) {
                 // Motion self-manages VarFloat state transitions via its own VarFloat definitions:
                 //   Type=1 condition selects the correct entry based on CURRENT state
                 //   Type=2 assign sets the NEW state after motion finishes
@@ -465,7 +488,7 @@ namespace {
                 // Do NOT use deferred sync — EvaluateVarFloats handles the transition correctly.
                 startMotionFn(effectiveMotion);
             } else {
-                // No motion — cascade immediately via SetGroupIndex (includes PartFade)
+                // No (usable) motion — cascade immediately via SetGroupIndex (includes PartFade)
                 SyncGroupParamOverrides(config.param, config.values[nextIdx]);
             }
         } else if (!config.param.empty()) {
@@ -667,8 +690,8 @@ void LAppLive2DManager::OnHitAreaBegan(csmFloat32 x, csmFloat32 y) {
                 if (MatchHitAreaConfig(_hitAreaConfigs[c], areaName, areaId)) {
                     // Same visibility rules as the Cubism3 IsHitAreaHit path:
                     // toggle/ignore_visibility areas stay tappable when hidden.
-                    bool isToggle = !_hitAreaConfigs[c].param.empty() && !_hitAreaConfigs[c].values.empty();
-                    bool checkVis = !(_hitAreaConfigs[c].ignore_visibility || isToggle);
+                    bool c2IgnoreVis = _hitAreaConfigs[c].ignore_visibility;  // hidden C2 components must not react; toggle no longer exempts
+                    bool checkVis = !c2IgnoreVis;
                     if (model->HitTest(areaId, areaName, hitX, hitY, checkVis)) {
                         _pressedHitAreaIndex = static_cast<int>(c);
                         std::string downMotion = _hitAreaConfigs[c].downMtn;
@@ -775,8 +798,8 @@ void LAppLive2DManager::OnDragWithHitArea(csmFloat32 x, csmFloat32 y) {
                 for (size_t c = 0; c < _hitAreaConfigs.size(); c++) {
                     if (!_hitAreaConfigs[c].enabled) continue;
                     if (MatchHitAreaConfig(_hitAreaConfigs[c], areaName, areaId)) {
-                        bool isToggle = !_hitAreaConfigs[c].param.empty() && !_hitAreaConfigs[c].values.empty();
-                        bool checkVis = !(_hitAreaConfigs[c].ignore_visibility || isToggle);
+                        bool c2IgnoreVis = _hitAreaConfigs[c].ignore_visibility;  // hidden C2 components must not react; toggle no longer exempts
+                        bool checkVis = !c2IgnoreVis;
                         if (model->HitTest(areaId, areaName, hitX, hitY, checkVis)) {
                             newHitIndex = static_cast<int>(c);
                             goto done_hit_check;
@@ -1436,8 +1459,8 @@ void LAppLive2DManager::OnTap(csmFloat32 x, csmFloat32 y, bool wasDragging) {
                     }
 
                     // Same visibility rules as the Cubism3 path in IsHitAreaHit
-                    bool isToggle = (matched != nullptr) && !matched->param.empty() && !matched->values.empty();
-                    bool checkVis = (matched == nullptr) || !(matched->ignore_visibility || isToggle);
+                    bool c2IgnoreVis = (matched != nullptr) && matched->ignore_visibility;
+                    bool checkVis = !c2IgnoreVis;
                     if (!model->HitTest(areaId, areaName, hitX, hitY, checkVis)) continue;
 
                     if (matched != nullptr) {
